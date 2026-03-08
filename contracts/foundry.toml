@@ -1,0 +1,40 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+# 禁用 fork 模式以避免 archive 节点要求 / Disable fork mode to avoid archive node requirement
+no_storage_caching = true
+# RPC 超时请用命令行传入：forge script ... --timeout 300
+# 已换为 Infura（Alchemy 限流）；也可在 .env 中设置 RPC_URL 或 ETH_RPC_URL 后通过 --rpc-url $env:RPC_URL 传入
+eth_rpc_url = "https://sei-testnet.infura.io/v3/d38f8cb7a81a4ed1bd19e941773fa8dd"
+
+# Remappings for OpenZeppelin
+remappings = [
+    "@openzeppelin/=lib/openzeppelin-contracts/",
+    "@forge-std/=lib/forge-std/src/"
+]
+
+# Fuzz 测试配置 / Fuzz testing configuration
+[fuzz]
+# 每个 fuzz 测试的运行次数 / Number of runs for each fuzz test
+# 默认 256，可以增加到 1000+ 以提高覆盖率 / Default 256, can increase to 1000+ for better coverage
+runs = 256
+# 最大测试拒绝次数 / Maximum test rejections
+# 当输入不满足 bound() 条件时的最大拒绝次数 / Maximum rejections when input doesn't satisfy bound() conditions
+max_test_rejects = 65536
+# 字典权重（0-100），用于指导 fuzz 测试使用已知的有趣值 / Dictionary weight (0-100) to guide fuzzer to use known interesting values
+dictionary_weight = 40
+# 随机种子（32 字节十六进制，0x 开头）/ Random seed (32-byte hex string, starts with 0x)
+# 用于复现 fuzz 测试结果，如果不设置则使用随机种子 / Used to reproduce fuzz test results, if not set uses random seed
+seed = "0x4e4f524d414c0000000000000000000000000000000000000000000000000000"
+# 是否包含存储访问模式 / Whether to include storage access patterns
+include_storage = true
+# 是否包含推送字节码 / Whether to include push bytecode
+include_push_bytes = true
+
+# RPC 配置 / RPC Configuration
+[rpc_endpoints]
+# 已换为 Infura / Switched to Infura
+testnet = "https://sei-testnet.infura.io/v3/d38f8cb7a81a4ed1bd19e941773fa8dd"
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

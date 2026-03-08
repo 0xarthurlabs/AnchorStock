@@ -1,0 +1,15 @@
+﻿# Environment variables
+.env
+.env.local
+
+# Foundry
+out/
+cache/
+broadcast/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

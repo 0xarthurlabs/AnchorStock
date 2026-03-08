@@ -1,0 +1,132 @@
+version: '3.9'
+
+services:
+  # ── Zookeeper - Kafka 协调服务 / Zookeeper - Kafka coordination ─────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: anchorstock_zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 2181 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Kafka - 消息队列 / Kafka - message queue ────────────────────────────────
+  # 宿主机 Relayer 连 localhost:9092 时，metadata 必须返回 localhost:9092，故 9092 用 PLAINTEXT_HOST（advertise localhost:9092）；Docker 内用 9093（kafka:9093）
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: anchorstock_kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # 9092 对宿主机广播为 localhost:9092，宿主机 Relayer 连 localhost:9092 时 metadata 里 leader 也是 localhost:9092，Produce 才能成功
+      KAFKA_LISTENERS: PLAINTEXT_HOST://0.0.0.0:9092,PLAINTEXT://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT_HOST://localhost:9092,PLAINTEXT://kafka:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_NUM_PARTITIONS: 3
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  # ── Kafka UI - 监控面板 / Kafka UI - monitoring dashboard ───────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: anchorstock_kafka_ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9093
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      DYNAMIC_CONFIG_ENABLED: "true"
+    restart: unless-stopped
+
+  # ── TimescaleDB - 时序数据库（K线存储）/ TimescaleDB - time-series (K-line) ─
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: anchorstock_timescaledb
+    environment:
+      POSTGRES_USER: anchorstock
+      POSTGRES_PASSWORD: anchorstock
+      POSTGRES_DB: anchorstock
+      POSTGRES_HOST_AUTH_METHOD: md5
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    command: postgres -c shared_preload_libraries=timescaledb -c listen_addresses='*' -c max_connections=200 -c password_encryption=md5
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anchorstock -d anchorstock"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Redis - 缓存 / Redis - cache ────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: anchorstock_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Redis Commander - Redis 监控面板 / Redis Commander - monitoring ─────────
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: anchorstock_redis_commander
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      REDIS_HOSTS: local:redis:6379
+      HTTP_USER: admin
+      HTTP_PASSWORD: admin
+    restart: unless-stopped
+
+  zoonavigator:
+    image: elkozmon/zoonavigator:latest
+    container_name: anchorstock_zoonavigator
+    ports:
+      - "8004:8000"
+    environment:
+      HTTP_PORT: 8000
+    restart: unless-stopped
+
+volumes:
+  timescaledb_data:
+  redis_data:
