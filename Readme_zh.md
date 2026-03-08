@@ -197,7 +197,7 @@ docker-compose up -d
 - `RPC_URL`、`PRIVATE_KEY`（Oracle Consumer / 清算用；Relayer 不需链）
 - `KAFKA_BROKER=localhost:9092`、`KAFKA_TOPIC_PRICE=stock-prices`
 - `DB_*`（TimescaleDB），`REDIS_*` 可选
-- `STOCK_API_KEY`、`STOCK_API_URL`（Relayer 用，如 Alpha Vantage）
+- `STOCK_API_KEY`、`STOCK_API_URL`（Relayer / Backfill 用，如 Alpha Vantage）；**若不配置则使用 mock 价格**（本地/测试可用）。`RELAYER_FETCH_INTERVAL` 为 Relayer 抓价间隔（默认 5m，Alpha Vantage 限频建议 5m 或更大）。
 
 ```bash
 # 终端 1：Relayer（API → Kafka）
@@ -270,7 +270,7 @@ npm run dev
 
 | 组件 | 主要配置 |
 |-----------|------------|
-| 后端 | `RPC_URL`、`PRIVATE_KEY`、`KAFKA_BROKER`、`KAFKA_TOPIC_PRICE`、`DB_*`、`STOCK_API_KEY`、`ORACLE_CONTRACT_ADDRESS`、`LENDING_POOL_*`、`PERP_ENGINE_*` |
+| 后端 | `RPC_URL`、`PRIVATE_KEY`、`KAFKA_BROKER`、`KAFKA_TOPIC_PRICE`、`DB_*`、`STOCK_API_KEY`（可选，不配则 mock 价）、`STOCK_API_URL`、`RELAYER_FETCH_INTERVAL`（抓价间隔，默认 5m）、`ORACLE_CONTRACT_ADDRESS`、`LENDING_POOL_*`、`PERP_ENGINE_*` |
 | 前端 | `NEXT_PUBLIC_BACKEND_API_URL`、各 `NEXT_PUBLIC_*_CONTRACT_ADDRESS`、`NEXT_PUBLIC_CHAIN_ID` |
 | 合约 | `contracts/.env` 中的 `PRIVATE_KEY` |
 

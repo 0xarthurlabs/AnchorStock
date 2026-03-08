@@ -197,7 +197,7 @@ Create `backend/.env` (see backend README for full list). Minimum:
 - `RPC_URL`, `PRIVATE_KEY` (for Oracle Consumer / Liquidation; Relayer does not need chain)
 - `KAFKA_BROKER=localhost:9092`, `KAFKA_TOPIC_PRICE=stock-prices`
 - `DB_*` for TimescaleDB, `REDIS_*` optional
-- `STOCK_API_KEY`, `STOCK_API_URL` for Relayer (e.g. Alpha Vantage)
+- `STOCK_API_KEY`, `STOCK_API_URL` (for Relayer / Backfill, e.g. Alpha Vantage); **if not set, mock price is used** (for local/testing). `RELAYER_FETCH_INTERVAL` is the Relayer fetch interval (default 5m; Alpha Vantage rate limit suggests 5m or larger).
 
 ```bash
 # Terminal 1: Relayer (API → Kafka)
@@ -270,7 +270,7 @@ Proxy: frontend calls backend at `NEXT_PUBLIC_BACKEND_API_URL` for `/api/price/:
 
 | Component | Key config |
 |-----------|------------|
-| Backend | `RPC_URL`, `PRIVATE_KEY`, `KAFKA_BROKER`, `KAFKA_TOPIC_PRICE`, `DB_*`, `STOCK_API_KEY`, `ORACLE_CONTRACT_ADDRESS`, `LENDING_POOL_*`, `PERP_ENGINE_*` |
+| Backend | `RPC_URL`, `PRIVATE_KEY`, `KAFKA_BROKER`, `KAFKA_TOPIC_PRICE`, `DB_*`, `STOCK_API_KEY` (optional; unset → mock price), `STOCK_API_URL`, `RELAYER_FETCH_INTERVAL` (fetch interval, default 5m), `ORACLE_CONTRACT_ADDRESS`, `LENDING_POOL_*`, `PERP_ENGINE_*` |
 | Frontend | `NEXT_PUBLIC_BACKEND_API_URL`, all `NEXT_PUBLIC_*_CONTRACT_ADDRESS`, `NEXT_PUBLIC_CHAIN_ID` |
 | Contracts | `PRIVATE_KEY` in `contracts/.env` |
 
