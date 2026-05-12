@@ -155,7 +155,12 @@ jobs:
           set -euo pipefail
           TARGET="${{ steps.url.outputs.service_url }}${SMOKE_PATH}"
           echo "Smoke check: GET ${TARGET}"
-          http_code="$(curl -sS -o /tmp/smoke-body.txt -w '%{http_code}' "${TARGET}" || true)"
+          TOKEN="$(gcloud auth print-identity-token --audiences="${{ steps.url.outputs.service_url }}" 2>/dev/null || true)"
+          CURL_ARGS=(-sS -o /tmp/smoke-body.txt -w '%{http_code}')
+          if [ -n "${TOKEN}" ]; then
+            CURL_ARGS+=(-H "Authorization: Bearer ${TOKEN}")
+          fi
+          http_code="$(curl "${CURL_ARGS[@]}" "${TARGET}" || true)"
           echo "HTTP ${http_code}"
           echo "--- body ---"
           cat /tmp/smoke-body.txt || true

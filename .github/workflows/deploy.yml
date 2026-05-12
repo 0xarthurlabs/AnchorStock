@@ -282,7 +282,7 @@ jobs:
             echo "VPC connector: ${VPC_CONNECTOR} egress=${VPC_EGRESS:-all-traffic}"
           fi
 
-          CMD+=(--quiet)
+          CMD+=(--allow-unauthenticated --quiet)
           "${CMD[@]}"
 
       - name: Get service URL
