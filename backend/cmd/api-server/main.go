@@ -10,13 +10,18 @@ import (
 	"syscall"
 	"time"
 
+	"bytes"
+
 	"anchorstock-backend/internal/cache"
 	"anchorstock-backend/internal/config"
 	"anchorstock-backend/internal/database"
+	"anchorstock-backend/internal/metrics"
 	"anchorstock-backend/pkg/price"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/common/expfmt"
 )
 
 func main() {
@@ -24,6 +29,9 @@ func main() {
 
 	// 加载配置 / Load configuration
 	cfg := config.Load()
+
+	// Prometheus: optional dedicated metrics listener for scrape jobs (e.g. :9090)
+	metrics.StartBackgroundServer(cfg.MetricsAddr)
 
 	// 创建 TimescaleDB 连接 / Create TimescaleDB connection
 	db, err := database.NewTimescaleDB(
@@ -62,6 +70,23 @@ func main() {
 			"status": "ok",
 			"time":   time.Now().Unix(),
 		})
+	})
+
+	// Prometheus metrics — native Fiber handler (avoids adaptor/v2 compat issues with Fiber v2.52+)
+	app.Get("/metrics", func(c *fiber.Ctx) error {
+		mfs, err := prometheus.DefaultGatherer.Gather()
+		if err != nil {
+			return c.Status(500).SendString(err.Error())
+		}
+		var buf bytes.Buffer
+		enc := expfmt.NewEncoder(&buf, expfmt.NewFormat(expfmt.TypeTextPlain))
+		for _, mf := range mfs {
+			if err := enc.Encode(mf); err != nil {
+				return c.Status(500).SendString(err.Error())
+			}
+		}
+		c.Set("Content-Type", string(expfmt.NewFormat(expfmt.TypeTextPlain)))
+		return c.Send(buf.Bytes())
 	})
 
 	// OHLCV K 线数据端点 / OHLCV candlestick data endpoint
@@ -219,7 +244,11 @@ func main() {
 	})
 
 	// 启动服务器 / Start server
-	port := os.Getenv("API_PORT")
+	// Cloud Run uses PORT; local/dev may use API_PORT.
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = os.Getenv("API_PORT")
+	}
 	if port == "" {
 		port = "3001"
 	}
@@ -234,6 +263,7 @@ func main() {
 	log.Printf("API Server started on :%s", port)
 	log.Println("Endpoints:")
 	log.Println("  - GET /health - Health check")
+	log.Println("  - GET /metrics - Prometheus metrics")
 	log.Println("  - GET /api/ohlcv?symbol=NVDA&interval=1h&limit=100 - OHLCV data")
 	log.Println("  - GET /api/price/:symbol - Latest price")
 	log.Println("  - GET /api/price-source/:symbol - Diagnostic: Alpha Vantage rate limit / empty response")
