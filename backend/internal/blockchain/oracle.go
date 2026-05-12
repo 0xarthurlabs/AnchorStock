@@ -71,6 +71,9 @@ func NewOracleClient(rpcURL, contractAddr, privateKeyHex string) (*OracleClient,
 
 // UpdatePrice 更新链上 Oracle 价格 / Update on-chain Oracle price
 func (o *OracleClient) UpdatePrice(ctx context.Context, priceData *price.StockPrice) (*types.Transaction, error) {
+	oracleInflightTx.Set(1)
+	defer oracleInflightTx.Set(0)
+
 	// 将价格转换为 uint256（8 位小数）/ Convert price to uint256 (8 decimals)
 	priceUint256, err := priceData.PriceToUint256()
 	if err != nil {
@@ -84,15 +87,12 @@ func (o *OracleClient) UpdatePrice(ctx context.Context, priceData *price.StockPr
 		return nil, fmt.Errorf("failed to pack data: %w", err)
 	}
 
-	// 创建交易签名器 / Create transaction signer
-	auth, err := bind.NewKeyedTransactorWithChainID(o.privateKey, o.chainID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create transactor: %w", err)
-	}
+	from := crypto.PubkeyToAddress(o.privateKey.PublicKey)
 
 	// 获取 gas 价格 / Get gas price
 	gasPrice, err := o.client.SuggestGasPrice(ctx)
 	if err != nil {
+		recordOracleRPCError("suggest_gas")
 		return nil, fmt.Errorf("failed to suggest gas price: %w", err)
 	}
 
@@ -102,12 +102,20 @@ func (o *OracleClient) UpdatePrice(ctx context.Context, priceData *price.StockPr
 		Data: data,
 	})
 	if err != nil {
+		recordOracleRPCError("estimate_gas")
 		return nil, fmt.Errorf("failed to estimate gas: %w", err)
 	}
 
+	nonce, err := o.client.PendingNonceAt(ctx, from)
+	if err != nil {
+		recordOracleRPCError("pending_nonce")
+		return nil, fmt.Errorf("failed to get nonce: %w", err)
+	}
+	oraclePendingNonce.Set(float64(nonce))
+
 	// 构建交易 / Build transaction
 	tx := types.NewTransaction(
-		auth.Nonce.Uint64(),
+		nonce,
 		o.contract,
 		big.NewInt(0), // value
 		gasLimit,
@@ -118,12 +126,20 @@ func (o *OracleClient) UpdatePrice(ctx context.Context, priceData *price.StockPr
 	// 签名交易 / Sign transaction
 	signedTx, err := types.SignTx(tx, types.NewEIP155Signer(o.chainID), o.privateKey)
 	if err != nil {
+		recordOracleRPCError("sign_tx")
 		return nil, fmt.Errorf("failed to sign transaction: %w", err)
 	}
 
 	// 发送交易 / Send transaction
 	if err := o.client.SendTransaction(ctx, signedTx); err != nil {
+		recordOracleRPCError("send_tx")
 		return nil, fmt.Errorf("failed to send transaction: %w", err)
+	}
+
+	if head, err := o.client.BlockNumber(ctx); err == nil {
+		oracleChainHead.Set(float64(head))
+	} else {
+		recordOracleRPCError("block_number")
 	}
 
 	log.Printf("Sent transaction to update price for %s: %s\n", priceData.Symbol, signedTx.Hash().Hex())
@@ -133,6 +149,9 @@ func (o *OracleClient) UpdatePrice(ctx context.Context, priceData *price.StockPr
 
 // UpdatePrices 批量更新价格 / Batch update prices
 func (o *OracleClient) UpdatePrices(ctx context.Context, prices map[string]*price.StockPrice) error {
+	oracleInflightTx.Set(1)
+	defer oracleInflightTx.Set(0)
+
 	symbols := make([]string, 0, len(prices))
 	priceValues := make([]*big.Int, 0, len(prices))
 
@@ -168,6 +187,7 @@ func (o *OracleClient) UpdatePrices(ctx context.Context, prices map[string]*pric
 
 	gasPrice, err := o.client.SuggestGasPrice(ctx)
 	if err != nil {
+		recordOracleRPCError("suggest_gas")
 		return fmt.Errorf("failed to suggest gas price: %w", err)
 	}
 
@@ -181,6 +201,7 @@ func (o *OracleClient) UpdatePrices(ctx context.Context, prices map[string]*pric
 	log.Printf("[Oracle] Simulating update with eth_call (from=%s, symbols=%v)...\n", from.Hex(), symbols)
 	_, err = o.client.CallContract(ctx, msg, nil)
 	if err != nil {
+		recordOracleRPCError("eth_call")
 		reason := extractRevertReason(err)
 		log.Printf("[Oracle] eth_call failed. Revert reason: %s\n", reason)
 		log.Printf("[Oracle] Raw RPC error: %v\n", err)
@@ -194,6 +215,7 @@ func (o *OracleClient) UpdatePrices(ctx context.Context, prices map[string]*pric
 		Data: data,
 	})
 	if err != nil {
+		recordOracleRPCError("estimate_gas")
 		reason := extractRevertReason(err)
 		return fmt.Errorf("failed to estimate gas: %s (original: %w)", reason, err)
 	}
@@ -201,8 +223,10 @@ func (o *OracleClient) UpdatePrices(ctx context.Context, prices map[string]*pric
 	// 获取当前 nonce（NewKeyedTransactorWithChainID 不会自动拉取）/ Get current nonce
 	nonce, err := o.client.PendingNonceAt(ctx, from)
 	if err != nil {
+		recordOracleRPCError("pending_nonce")
 		return fmt.Errorf("failed to get nonce: %w", err)
 	}
+	oraclePendingNonce.Set(float64(nonce))
 	auth.Nonce = big.NewInt(int64(nonce))
 
 	// 构建交易 / Build transaction
@@ -218,11 +242,19 @@ func (o *OracleClient) UpdatePrices(ctx context.Context, prices map[string]*pric
 	// 签名并发送交易 / Sign and send transaction
 	signedTx, err := types.SignTx(tx, types.NewEIP155Signer(o.chainID), o.privateKey)
 	if err != nil {
+		recordOracleRPCError("sign_tx")
 		return fmt.Errorf("failed to sign transaction: %w", err)
 	}
 
 	if err := o.client.SendTransaction(ctx, signedTx); err != nil {
+		recordOracleRPCError("send_tx")
 		return fmt.Errorf("failed to send transaction: %w", err)
+	}
+
+	if head, err := o.client.BlockNumber(ctx); err == nil {
+		oracleChainHead.Set(float64(head))
+	} else {
+		recordOracleRPCError("block_number")
 	}
 
 	log.Printf("Sent batch update transaction: %s\n", signedTx.Hash().Hex())

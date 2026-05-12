@@ -47,6 +47,10 @@ type Config struct {
 	StockAPIURL        string
 	StockSymbols       []string      // 监控的股票符号列表 / List of stock symbols to monitor
 	StockFetchInterval time.Duration // 价格抓取间隔（默认 5m，适配 Alpha Vantage 免费 5 次/分钟）/ Price fetch interval (default 5m for Alpha Vantage free tier)
+
+	// Prometheus：常驻进程独立 metrics HTTP；api-server 使用主端口 /metrics，可忽略此项。
+	// Prometheus: standalone metrics HTTP for workers; api-server serves /metrics on main listener.
+	MetricsAddr string
 }
 
 // Load 加载配置 / Load configuration
@@ -181,6 +185,8 @@ func Load() *Config {
 		StockAPIURL:        getEnv("STOCK_API_URL", "https://api.example.com"),
 		StockSymbols:       defaultSymbols,
 		StockFetchInterval: fetchInterval,
+
+		MetricsAddr: getEnv("METRICS_ADDR", ""),
 	}
 }
 
