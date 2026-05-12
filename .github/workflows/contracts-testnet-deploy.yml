@@ -1,0 +1,110 @@
+# Testnet only: manual trigger + broadcast deploy + upload deployment artifact.
+# Do not add push triggers. Do not use production mainnet keys in GitHub Secrets long-term.
+name: Contracts (testnet deploy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_env:
+        description: "Artifact folder under contracts/deployments/<env>/"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - testnet
+      chain_id:
+        description: "Chain ID (e.g. 1328 for Sei testnet)"
+        required: true
+        type: string
+
+concurrency:
+  group: contracts-testnet-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: forge-script-broadcast-artifact
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_ENV: ${{ inputs.deploy_env }}
+      CHAIN_ID: ${{ inputs.chain_id }}
+      GIT_COMMIT: ${{ github.sha }}
+      WRITE_DEPLOYMENT_ARTIFACT: "true"
+      OPTIMIZER_ENABLED: "true"
+      OPTIMIZER_RUNS: "200"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Export compiler metadata for deployment artifact
+        working-directory: contracts
+        run: |
+          set -euo pipefail
+          forge build
+          solc="$(jq -r '.solcLongVersion' out/build-info/*.json 2>/dev/null | head -n 1 || true)"
+          if [ -z "${solc}" ] || [ "${solc}" = "null" ]; then
+            echo "WARN: could not read solcLongVersion from build-info; set SOLC_VERSION manually in repo vars if needed."
+          else
+            echo "SOLC_VERSION=${solc}" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Deploy (broadcast) + write deployments/<env>/<chainId>.json
+        working-directory: contracts
+        env:
+          PRIVATE_KEY: ${{ secrets.TESTNET_DEPLOYER_PRIVATE_KEY }}
+          ETH_RPC_URL: ${{ secrets.TESTNET_RPC_URL }}
+          EXPLORER_BASE: ${{ vars.TESTNET_EXPLORER_ADDRESS_PREFIX }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PRIVATE_KEY:-}" ] || [ "${PRIVATE_KEY}" = "" ]; then
+            echo "ERROR: secret TESTNET_DEPLOYER_PRIVATE_KEY is not set." >&2
+            exit 1
+          fi
+          if [ -z "${ETH_RPC_URL:-}" ] || [ "${ETH_RPC_URL}" = "" ]; then
+            echo "ERROR: secret TESTNET_RPC_URL is not set." >&2
+            exit 1
+          fi
+          forge script script/Deploy.s.sol:DeployScript \
+            --rpc-url "${ETH_RPC_URL}" \
+            --broadcast \
+            --chain-id "${CHAIN_ID}" \
+            --gas-estimate-multiplier 150 \
+            --timeout 600 \
+            -vvv
+
+      - name: Verify deployment artifact exists
+        working-directory: contracts
+        run: |
+          set -euo pipefail
+          path="deployments/${DEPLOY_ENV}/${CHAIN_ID}.json"
+          if [ ! -f "${path}" ]; then
+            echo "ERROR: expected artifact missing: ${path}" >&2
+            exit 1
+          fi
+          echo "OK: ${path}"
+
+      - name: Upload deployment JSON artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-${{ inputs.deploy_env }}-${{ inputs.chain_id }}
+          path: contracts/deployments/${{ inputs.deploy_env }}/${{ inputs.chain_id }}.json
+          if-no-files-found: error
+
+      - name: Upload broadcast trace (debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: broadcast-${{ inputs.deploy_env }}-${{ inputs.chain_id }}
+          path: contracts/broadcast/
+          if-no-files-found: ignore

@@ -1,0 +1,4 @@
+# Replace @YOUR_ORG/anchorstock-contracts with your GitHub org team or @user handles.
+# Branch protection: enable "Require review from Code Owners" for main (or default branch).
+contracts/ @YOUR_ORG/anchorstock-contracts
+.github/workflows/contracts-*.yml @YOUR_ORG/anchorstock-contracts

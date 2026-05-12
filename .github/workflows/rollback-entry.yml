@@ -1,0 +1,61 @@
+name: Rollback (single entry)
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - staging
+          - prod
+      smoke_path:
+        description: HTTP path for smoke check
+        required: true
+        default: /health
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  resolve:
+    name: resolve
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    outputs:
+      project_id: ${{ steps.out.outputs.project_id }}
+      region: ${{ steps.out.outputs.region }}
+      service: ${{ steps.out.outputs.service }}
+    steps:
+      - name: Export environment-scoped variables
+        id: out
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "project_id=${{ vars.PROJECT_ID }}" >> "$GITHUB_OUTPUT"
+          echo "region=${{ vars.REGION }}"         >> "$GITHUB_OUTPUT"
+          echo "service=${{ vars.SERVICE }}"       >> "$GITHUB_OUTPUT"
+
+          for k in project_id region service; do
+            v="$(grep -E "^${k}=" "$GITHUB_OUTPUT" | cut -d= -f2- || true)"
+            if [ -z "$v" ]; then
+              echo "ERROR: missing variable: $k (check Environment '${{ inputs.env }}' variables)" >&2
+              exit 1
+            fi
+          done
+
+  rollback:
+    name: rollback
+    needs: [resolve]
+    uses: ./.github/workflows/rollback.yml
+    with:
+      project_id: ${{ needs.resolve.outputs.project_id }}
+      region: ${{ needs.resolve.outputs.region }}
+      service: ${{ needs.resolve.outputs.service }}
+      smoke_path: ${{ inputs.smoke_path }}
+    secrets:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+

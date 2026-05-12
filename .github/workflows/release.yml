@@ -1,0 +1,160 @@
+name: Release (single entry)
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - staging
+          - prod
+      smoke_path:
+        description: HTTP path for smoke check
+        required: true
+        default: /health
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  resolve:
+    name: resolve
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    outputs:
+      project_id: ${{ steps.out.outputs.project_id }}
+      region: ${{ steps.out.outputs.region }}
+      service: ${{ steps.out.outputs.service }}
+      gar_repo: ${{ steps.out.outputs.gar_repo }}
+      image_name: ${{ steps.out.outputs.image_name }}
+      db_host: ${{ steps.out.outputs.db_host }}
+      db_port: ${{ steps.out.outputs.db_port }}
+      db_user: ${{ steps.out.outputs.db_user }}
+      db_name: ${{ steps.out.outputs.db_name }}
+      vpc_connector: ${{ steps.out.outputs.vpc_connector }}
+      vpc_egress: ${{ steps.out.outputs.vpc_egress }}
+    steps:
+      - name: Export environment-scoped variables
+        id: out
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "project_id=${{ vars.PROJECT_ID }}"           >> "$GITHUB_OUTPUT"
+          echo "region=${{ vars.REGION }}"                     >> "$GITHUB_OUTPUT"
+          echo "service=${{ vars.SERVICE }}"                   >> "$GITHUB_OUTPUT"
+          echo "gar_repo=${{ vars.GAR_REPO }}"                 >> "$GITHUB_OUTPUT"
+          echo "image_name=${{ vars.IMAGE_NAME || 'anchorstock-api' }}" >> "$GITHUB_OUTPUT"
+          echo "db_host=${{ vars.DB_HOST }}"                   >> "$GITHUB_OUTPUT"
+          echo "db_port=${{ vars.DB_PORT || '5432' }}"         >> "$GITHUB_OUTPUT"
+          echo "db_user=${{ vars.DB_USER || 'anchorstock' }}"  >> "$GITHUB_OUTPUT"
+          echo "db_name=${{ vars.DB_NAME || 'anchorstock' }}"  >> "$GITHUB_OUTPUT"
+          echo "vpc_connector=${{ vars.VPC_CONNECTOR }}"       >> "$GITHUB_OUTPUT"
+          echo "vpc_egress=${{ vars.VPC_EGRESS || 'all-traffic' }}" >> "$GITHUB_OUTPUT"
+
+          for k in project_id region service gar_repo; do
+            v="$(grep -E "^${k}=" "$GITHUB_OUTPUT" | cut -d= -f2- || true)"
+            if [ -z "$v" ]; then
+              echo "ERROR: missing variable: $k (check Environment '${{ inputs.env }}' variables)" >&2
+              exit 1
+            fi
+          done
+
+  deploy:
+    name: deploy
+    needs: [resolve]
+    uses: ./.github/workflows/deploy.yml
+    with:
+      project_id: ${{ needs.resolve.outputs.project_id }}
+      region: ${{ needs.resolve.outputs.region }}
+      service: ${{ needs.resolve.outputs.service }}
+      gar_repo: ${{ needs.resolve.outputs.gar_repo }}
+      image_name: ${{ needs.resolve.outputs.image_name }}
+      dockerfile: docker/cloudrun/api-server.Dockerfile
+      context: .
+      smoke_path: ${{ inputs.smoke_path }}
+      db_host: ${{ needs.resolve.outputs.db_host }}
+      db_port: ${{ needs.resolve.outputs.db_port }}
+      db_user: ${{ needs.resolve.outputs.db_user }}
+      db_name: ${{ needs.resolve.outputs.db_name }}
+      vpc_connector: ${{ needs.resolve.outputs.vpc_connector }}
+      vpc_egress: ${{ needs.resolve.outputs.vpc_egress }}
+      env_name: ${{ inputs.env }}
+    secrets:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+  # Staging-only extended smoke (4.6 单入口编排的一部分): extra paths from repo variable CLOUDRUN_STAGING_SMOKE_PATHS (comma-separated).
+  staging-extended-smoke:
+    name: staging-extended-smoke
+    needs: [deploy]
+    if: ${{ inputs.env == 'staging' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Extended smoke (config-driven paths)
+        env:
+          BASE_URL: ${{ needs.deploy.outputs.service_url }}
+          EXTRA_PATHS: ${{ vars.SMOKE_PATHS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_URL}" ]; then
+            echo "ERROR: deploy did not expose service_url" >&2
+            exit 1
+          fi
+          PATHS="${EXTRA_PATHS:-/metrics}"
+          IFS=',' read -r -a ARR <<< "${PATHS}"
+          for raw in "${ARR[@]}"; do
+            p="$(echo "${raw}" | xargs)"
+            [ -n "${p}" ] || continue
+            case "${p}" in
+              /*) ;;
+              *) p="/${p}" ;;
+            esac
+            url="${BASE_URL}${p}"
+            echo "GET ${url}"
+            code="$(curl -sS -o /tmp/ext-smoke.txt -w '%{http_code}' "${url}" || true)"
+            echo "HTTP ${code}"
+            head -c 2000 /tmp/ext-smoke.txt || true
+            echo
+            if [ "${code}" != "200" ]; then
+              echo "ERROR: extended smoke failed for ${p}" >&2
+              exit 1
+            fi
+          done
+          echo "Extended smoke OK"
+
+  orchestration-notify-failure:
+    name: orchestration-notify-failure
+    needs: [deploy, staging-extended-smoke]
+    if: ${{ always() && (needs.deploy.result == 'failure' || (inputs.env == 'staging' && needs.staging-extended-smoke.result == 'failure')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify on-call (OpenClaw / IM webhook — optional)
+        env:
+          WEBHOOK_URL: ${{ secrets.OPENCLAW_ALERT_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          echo "::error::Release orchestration failed (deploy or staging extended smoke)."
+          if [ -z "${WEBHOOK_URL:-}" ]; then
+            echo "OPENCLAW_ALERT_WEBHOOK_URL not set; skipping webhook (set secret for P5)."
+            exit 0
+          fi
+          python3 <<'PY'
+          import json, os, urllib.request
+          repo = os.environ["GITHUB_REPOSITORY"]
+          wf = os.environ["GITHUB_WORKFLOW"]
+          run = os.environ["GITHUB_RUN_ID"]
+          url = f"https://github.com/{repo}/actions/runs/{run}"
+          payload = {"text": f"AnchorStock workflow failed: {repo} {wf} run={run} {url}"}
+          req = urllib.request.Request(
+              os.environ["WEBHOOK_URL"],
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          urllib.request.urlopen(req, timeout=30)
+          PY
+

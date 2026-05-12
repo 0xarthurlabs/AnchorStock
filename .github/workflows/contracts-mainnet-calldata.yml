@@ -1,0 +1,130 @@
+# Mainnet: simulation / calldata generation only — NEVER pass --broadcast here.
+# Uses a well-known Anvil #1 private key only to satisfy DeployScript; it is not the default Anvil account
+# blocked by DeployScript and must hold no mainnet funds. Prefer org secret CONTRACTS_DRY_RUN_PRIVATE_KEY to override.
+# Governance still executes txs via Safe / timelock / hardware wallet off CI.
+name: Contracts (mainnet calldata only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      chain_id:
+        description: "Mainnet chain ID (usually 1)"
+        required: true
+        default: "1"
+      run_deploy_simulation:
+        description: "Run Deploy.s.sol without broadcast (logs calldata traces)"
+        type: boolean
+        default: true
+      run_rollback_calldata:
+        description: "Run RollbackParams.s.sol (needs committed artifact under contracts/deployments/)"
+        type: boolean
+        default: false
+      artifact_deploy_env:
+        description: "For RollbackParams: deployments/<env>/<chain_id>.json"
+        required: false
+        default: staging
+      governance_address:
+        description: "Address passed to RollbackParams.run(address) (Safe / timelock)"
+        required: false
+        default: "0x0000000000000000000000000000000000000001"
+
+concurrency:
+  group: contracts-mainnet-calldata-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  calldata:
+    name: generate-logs-and-hashes
+    runs-on: ubuntu-latest
+    env:
+      CHAIN_ID: ${{ inputs.chain_id }}
+      # Simulation-only signer: Anvil account #1 (not blocked by DeployScript on non-local chains).
+      CONTRACTS_DRY_RUN_PRIVATE_KEY: ${{ secrets.CONTRACTS_DRY_RUN_PRIVATE_KEY }}
+    steps:
+      - name: Require at least one calldata step
+        if: ${{ inputs.run_deploy_simulation == false && inputs.run_rollback_calldata == false }}
+        run: |
+          echo "ERROR: enable run_deploy_simulation and/or run_rollback_calldata." >&2
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Prepare env (no deployment artifact write on mainnet sim)
+        working-directory: contracts
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/mainnet-calldata
+          if [ -n "${CONTRACTS_DRY_RUN_PRIVATE_KEY:-}" ]; then
+            echo "::add-mask::${CONTRACTS_DRY_RUN_PRIVATE_KEY}"
+            echo "PRIVATE_KEY=${CONTRACTS_DRY_RUN_PRIVATE_KEY}" >> "${GITHUB_ENV}"
+          else
+            echo "PRIVATE_KEY=0x59c6995e998f97a5a0044966f094538b2920f8e2d2f1b0dff78eaefddc6f8d39" >> "${GITHUB_ENV}"
+          fi
+          echo "WRITE_DEPLOYMENT_ARTIFACT=false" >> "${GITHUB_ENV}"
+          echo "GIT_COMMIT=${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Deploy script dry-run (no broadcast)
+        if: inputs.run_deploy_simulation == true
+        working-directory: contracts
+        env:
+          MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MAINNET_RPC_URL:-}" ] || [ "${MAINNET_RPC_URL}" = "" ]; then
+            echo "ERROR: secret MAINNET_RPC_URL is not set (read-only RPC is enough)." >&2
+            exit 1
+          fi
+          forge script script/Deploy.s.sol:DeployScript \
+            --rpc-url "${MAINNET_RPC_URL}" \
+            --chain-id "${CHAIN_ID}" \
+            --gas-estimate-multiplier 150 \
+            --timeout 600 \
+            -vvvv 2>&1 | tee /tmp/mainnet-calldata/deploy-simulation.log
+
+      - name: Rollback / param-restore calldata (view script)
+        if: inputs.run_rollback_calldata == true
+        working-directory: contracts
+        env:
+          MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL }}
+          DEPLOY_ENV: ${{ inputs.artifact_deploy_env }}
+          CHAIN_ID: ${{ inputs.chain_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MAINNET_RPC_URL:-}" ] || [ "${MAINNET_RPC_URL}" = "" ]; then
+            echo "ERROR: secret MAINNET_RPC_URL is not set." >&2
+            exit 1
+          fi
+          art="deployments/${DEPLOY_ENV}/${CHAIN_ID}.json"
+          if [ ! -f "${art}" ]; then
+            echo "ERROR: missing artifact ${art}. Commit it or adjust artifact_deploy_env / chain_id inputs." >&2
+            exit 1
+          fi
+          forge script script/RollbackParams.s.sol:RollbackParams \
+            --rpc-url "${MAINNET_RPC_URL}" \
+            --sig "run(address)" "${{ inputs.governance_address }}" \
+            -vvvv 2>&1 | tee /tmp/mainnet-calldata/rollback-calldata.log
+
+      - name: Hash logs
+        run: |
+          set -euo pipefail
+          cd /tmp/mainnet-calldata
+          sha256sum *.log > SHA256SUMS.txt 2>/dev/null || true
+          ls -la
+
+      - name: Upload calldata logs + hashes
+        uses: actions/upload-artifact@v4
+        with:
+          name: mainnet-calldata-${{ github.run_id }}
+          path: /tmp/mainnet-calldata/
+          if-no-files-found: warn

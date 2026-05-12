@@ -1,0 +1,179 @@
+name: Rollback (Cloud Run)
+
+on:
+  workflow_call:
+    inputs:
+      project_id:
+        description: GCP project id
+        required: true
+        type: string
+      region:
+        description: Cloud Run region (e.g. us-central1)
+        required: true
+        type: string
+      service:
+        description: Cloud Run service name
+        required: true
+        type: string
+      smoke_path:
+        description: HTTP path for smoke check
+        required: true
+        type: string
+        default: /health
+    secrets:
+      GCP_WORKLOAD_IDENTITY_PROVIDER:
+        required: true
+      GCP_SERVICE_ACCOUNT_EMAIL:
+        required: true
+    outputs:
+      rolled_back_to_revision:
+        description: Revision that received 100% traffic after rollback
+        value: ${{ jobs.rollback-smoke.outputs.rolled_back_to_revision }}
+      previous_revision:
+        description: Revision that was current before rollback started
+        value: ${{ jobs.rollback-smoke.outputs.previous_revision }}
+      service_url:
+        description: Cloud Run service URL used for smoke check
+        value: ${{ jobs.rollback-smoke.outputs.service_url }}
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: GCP project id
+        required: true
+      region:
+        description: Cloud Run region (e.g. us-central1)
+        required: true
+      service:
+        description: Cloud Run service name
+        required: true
+      smoke_path:
+        description: HTTP path for smoke check
+        required: true
+        default: /health
+
+concurrency:
+  group: rollback-${{ inputs.project_id }}-${{ inputs.region }}-${{ inputs.service }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  rollback-smoke:
+    name: rollback-smoke
+    runs-on: ubuntu-latest
+    outputs:
+      rolled_back_to_revision: ${{ steps.revs.outputs.PREV }}
+      previous_revision: ${{ steps.revs.outputs.CURRENT }}
+      service_url: ${{ steps.url.outputs.service_url }}
+    env:
+      PROJECT_ID: ${{ inputs.project_id }}
+      REGION: ${{ inputs.region }}
+      SERVICE: ${{ inputs.service }}
+      SMOKE_PATH: ${{ inputs.smoke_path }}
+    steps:
+      - name: Auth to Google Cloud (Workload Identity)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve current and previous revisions
+        id: revs
+        run: |
+          set -euo pipefail
+
+          CURRENT="$(gcloud run services describe "${SERVICE}" --project "${PROJECT_ID}" --region "${REGION}" --format='value(status.traffic[0].revisionName)')"
+          if [ -z "${CURRENT}" ]; then
+            echo "ERROR: cannot resolve current revision (status.traffic[0].revisionName empty)" >&2
+            exit 1
+          fi
+          echo "Current revision: ${CURRENT}"
+
+          # List revisions newest->oldest
+          mapfile -t revs < <(gcloud run revisions list \
+            --project "${PROJECT_ID}" \
+            --region "${REGION}" \
+            --service "${SERVICE}" \
+            --sort-by="~metadata.creationTimestamp" \
+            --format="value(metadata.name)")
+
+          if [ "${#revs[@]}" -lt 2 ]; then
+            echo "ERROR: no previous revision exists to rollback to (revisions=${#revs[@]})" >&2
+            exit 1
+          fi
+
+          PREV=""
+          for r in "${revs[@]}"; do
+            if [ "${r}" != "${CURRENT}" ]; then
+              PREV="${r}"
+              break
+            fi
+          done
+
+          if [ -z "${PREV}" ]; then
+            echo "ERROR: failed to find a previous revision different from current" >&2
+            exit 1
+          fi
+
+          echo "Previous revision candidate: ${PREV}"
+          echo "CURRENT=${CURRENT}" >> "$GITHUB_OUTPUT"
+          echo "PREV=${PREV}" >> "$GITHUB_OUTPUT"
+
+      - name: Roll back traffic to previous revision (100%)
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.revs.outputs.CURRENT }}" = "${{ steps.revs.outputs.PREV }}" ]; then
+            echo "No-op: current revision already equals previous (unexpected)."
+            exit 0
+          fi
+          echo "Updating traffic: ${SERVICE} -> ${{ steps.revs.outputs.PREV }} (100%)"
+          gcloud run services update-traffic "${SERVICE}" \
+            --project "${PROJECT_ID}" \
+            --region "${REGION}" \
+            --to-revisions "${{ steps.revs.outputs.PREV }}=100" \
+            --quiet
+
+      - name: Get service URL
+        id: url
+        run: |
+          set -euo pipefail
+          URL="$(gcloud run services describe "${SERVICE}" --project "${PROJECT_ID}" --region "${REGION}" --format='value(status.url)')"
+          if [ -z "${URL}" ]; then
+            echo "ERROR: failed to get Cloud Run service URL" >&2
+            exit 1
+          fi
+          echo "service_url=${URL}" >> "$GITHUB_OUTPUT"
+          echo "Service URL: ${URL}"
+
+      - name: Smoke check
+        run: |
+          set -euo pipefail
+          TARGET="${{ steps.url.outputs.service_url }}${SMOKE_PATH}"
+          echo "Smoke check: GET ${TARGET}"
+          http_code="$(curl -sS -o /tmp/smoke-body.txt -w '%{http_code}' "${TARGET}" || true)"
+          echo "HTTP ${http_code}"
+          echo "--- body ---"
+          cat /tmp/smoke-body.txt || true
+          if [ "${http_code}" != "200" ]; then
+            echo "ERROR: smoke check failed (expected 200)" >&2
+            exit 1
+          fi
+
+      - name: Audit summary (rollback)
+        if: always()
+        run: |
+          {
+            echo "## Cloud Run rollback audit"
+            echo "- workflow: ${{ github.workflow }}"
+            echo "- run: ${{ github.run_id }} attempt ${{ github.run_attempt }}"
+            echo "- actor: ${{ github.actor }}"
+            echo "- previous_revision: ${{ steps.revs.outputs.CURRENT }}"
+            echo "- rolled_back_to: ${{ steps.revs.outputs.PREV }}"
+            echo "- service_url: ${{ steps.url.outputs.service_url }}"
+            echo "- project/region/service: ${PROJECT_ID} / ${REGION} / ${SERVICE}"
+          } >> "$GITHUB_STEP_SUMMARY"

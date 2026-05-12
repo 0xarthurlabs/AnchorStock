@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go-test-vet:
+    name: go-test-vet
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Go test
+        run: go test ./...
+
+  contracts-min-gate:
+    name: contracts-min-gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache Foundry artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            contracts/cache
+            contracts/out
+          key: foundry-${{ runner.os }}-${{ hashFiles('contracts/foundry.toml', 'contracts/**/*.sol') }}
+          restore-keys: |
+            foundry-${{ runner.os }}-
+
+      - name: Setup Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Forge fmt (check)
+        run: forge fmt --check
+
+      - name: Forge build
+        run: forge build
+
+      - name: Forge test
+        env:
+          FOUNDRY_HTTP_TIMEOUT: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) && '120' || '300' }}
+        run: forge test
+
+  contracts-slither:
+    name: contracts-slither
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache Foundry artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            contracts/cache
+            contracts/out
+          key: foundry-${{ runner.os }}-${{ hashFiles('contracts/foundry.toml', 'contracts/**/*.sol') }}
+          restore-keys: |
+            foundry-${{ runner.os }}-
+
+      - name: Setup Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Forge build (Slither needs compiler output)
+        run: forge build
+
+      - name: Slither
+        uses: crytic/slither-action@v0.4.0
+        with:
+          target: contracts
+          slither-args: --config-file contracts/slither.config.json
+          fail-on: medium
