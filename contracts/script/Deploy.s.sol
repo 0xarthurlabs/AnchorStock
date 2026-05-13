@@ -155,7 +155,9 @@ contract DeployScript is Script {
         bool writeArtifact = vm.envOr("WRITE_DEPLOYMENT_ARTIFACT", true);
         if (writeArtifact) {
             string memory deployEnv = vm.envOr("DEPLOY_ENV", string("dev"));
-            string memory out = string.concat("deployments/", deployEnv, "/", vm.toString(block.chainid), ".json");
+            string memory dir = string.concat("deployments/", deployEnv);
+            vm.createDir(dir, true);
+            string memory out = string.concat(dir, "/", vm.toString(block.chainid), ".json");
             string memory root = "artifact";
             root = vm.serializeString(root, "env", deployEnv);
             root = vm.serializeUint(root, "chainId", block.chainid);
