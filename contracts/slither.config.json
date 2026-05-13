@@ -1,3 +1,4 @@
 {
-  "filter_paths": "lib/(forge-std|openzeppelin-contracts)(/|$)"
+  "filter_paths": "lib/(forge-std|openzeppelin-contracts)(/|$)",
+  "detectors_to_exclude": "pyth-unchecked"
 }

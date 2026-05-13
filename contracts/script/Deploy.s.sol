@@ -129,13 +129,7 @@ contract DeployScript is Script {
 
         // 5. 部署 LendingPool / Deploy LendingPool
         console.log("\n5. Deploying LendingPool...");
-        LendingPool lendingPoolContract = new LendingPool(
-            rwaToken,
-            usdToken,
-            oracle,
-            STOCK_SYMBOL,
-            deployer
-        );
+        LendingPool lendingPoolContract = new LendingPool(rwaToken, usdToken, oracle, STOCK_SYMBOL, deployer);
         lendingPool = address(lendingPoolContract);
         console.log("LendingPool deployed at:", lendingPool);
 
@@ -145,12 +139,7 @@ contract DeployScript is Script {
 
         // 6. 部署 PerpEngine / Deploy PerpEngine
         console.log("\n6. Deploying PerpEngine...");
-        PerpEngine perpEngineContract = new PerpEngine(
-            oracle,
-            STOCK_SYMBOL,
-            aToken,
-            deployer
-        );
+        PerpEngine perpEngineContract = new PerpEngine(oracle, STOCK_SYMBOL, aToken, deployer);
         perpEngine = address(perpEngineContract);
         console.log("PerpEngine deployed at:", perpEngine);
 
