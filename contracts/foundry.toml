@@ -5,12 +5,10 @@ libs = ["lib"]
 # Deploy.s.sol writes deployments/<env>/<chainId>.json via vm.writeJson (broadcast + CI)
 fs_permissions = [{ access = "read-write", path = "./deployments" }]
 # 禁用 fork 模式以避免 archive 节点要求 / Disable fork mode to avoid archive node requirement
+# 不要在 [profile.default] 设置 eth_rpc_url：否则 forge test 会走链上后端，CI 无 fork 块会报 Unknown block number。
+# 脚本请使用：forge script ... --rpc-url <URL> 或环境变量；本文件 [rpc_endpoints] 仅作命名端点。
 no_storage_caching = true
 # RPC 超时请用命令行传入：forge script ... --timeout 300
-# 已换为 Infura（Alchemy 限流）；也可在 .env 中设置 RPC_URL 或 ETH_RPC_URL 后通过 --rpc-url $env:RPC_URL 传入
-eth_rpc_url = "https://sei-testnet.infura.io/v3/d38f8cb7a81a4ed1bd19e941773fa8dd"
-
-# Remappings for OpenZeppelin
 remappings = [
     "@openzeppelin/=lib/openzeppelin-contracts/",
     "@forge-std/=lib/forge-std/src/"
@@ -34,9 +32,8 @@ include_storage = true
 # 是否包含推送字节码 / Whether to include push bytecode
 include_push_bytes = true
 
-# RPC 配置 / RPC Configuration
+# RPC 配置 / RPC Configuration（不在仓库写密钥；见 contracts/.env.example 的 RPC_URL）
 [rpc_endpoints]
-# 已换为 Infura / Switched to Infura
-testnet = "https://sei-testnet.infura.io/v3/d38f8cb7a81a4ed1bd19e941773fa8dd"
+testnet = "${TESTNET_RPC_URL}"
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
