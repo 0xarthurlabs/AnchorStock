@@ -37,12 +37,10 @@ contract aToken is ERC20, Ownable {
      * @param underlyingAssetAddr 底层资产地址 / Underlying asset address
      * @param initialOwner 合约所有者（通常是 LendingPool）/ Contract owner (usually LendingPool)
      */
-    constructor(
-        string memory tokenName,
-        string memory tokenSymbol,
-        address underlyingAssetAddr,
-        address initialOwner
-    ) ERC20(tokenName, tokenSymbol) Ownable(initialOwner) {
+    constructor(string memory tokenName, string memory tokenSymbol, address underlyingAssetAddr, address initialOwner)
+        ERC20(tokenName, tokenSymbol)
+        Ownable(initialOwner)
+    {
         require(underlyingAssetAddr != address(0), "aToken: invalid underlying asset");
         underlyingAsset = underlyingAssetAddr;
     }

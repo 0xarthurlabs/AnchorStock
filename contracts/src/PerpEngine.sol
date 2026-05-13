@@ -118,12 +118,9 @@ contract PerpEngine is Ownable, ReentrancyGuard {
      * @param collateralTokenAddr aToken 地址 / aToken address
      * @param initialOwner 合约所有者地址 / Contract owner address
      */
-    constructor(
-        address oracleAddr,
-        string memory stockSymbolStr,
-        address collateralTokenAddr,
-        address initialOwner
-    ) Ownable(initialOwner) {
+    constructor(address oracleAddr, string memory stockSymbolStr, address collateralTokenAddr, address initialOwner)
+        Ownable(initialOwner)
+    {
         if (oracleAddr == address(0)) {
             emit CheckFailedInvalidAddress("PerpEngine: invalid oracle", oracleAddr);
             require(false, "PerpEngine: invalid oracle");
