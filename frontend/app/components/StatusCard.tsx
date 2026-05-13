@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useAccount, useReadContract } from 'wagmi';
 import { formatEther, formatUnits } from 'viem';
-import { CONTRACTS, LENDING_POOL_ABI, PERP_ENGINE_ABI } from '../lib/contracts';
+import { LENDING_POOL_ABI, PERP_ENGINE_ABI } from '../lib/contracts';
+import { useRuntimeConfig } from '../lib/runtimeConfig';
 
 interface StatusCardProps {
   title: string;
@@ -31,6 +32,7 @@ function StatusCard({ title, value, subtitle, status = 'healthy' }: StatusCardPr
 export function UserStatusCards() {
   const [mounted, setMounted] = useState(false);
   const { address } = useAccount();
+  const { contracts } = useRuntimeConfig();
 
   // Prevent hydration mismatch / 防止水合不匹配
   useEffect(() => {
@@ -39,30 +41,30 @@ export function UserStatusCards() {
 
   // Read health factor from LendingPool (on-chain)
   const { data: lendingHealthFactor } = useReadContract({
-    address: CONTRACTS.LENDING_POOL!,
+    address: contracts.LENDING_POOL!,
     abi: LENDING_POOL_ABI,
     functionName: 'getAccountHealthFactor',
     args: address ? [address] : undefined,
-    enabled: !!address && !!CONTRACTS.LENDING_POOL,
+    query: { enabled: !!address && !!contracts.LENDING_POOL },
   });
 
   // Read health factor from PerpEngine (on-chain) / 从 PerpEngine 读取健康因子（链上）
   const { data: perpHealthFactor } = useReadContract({
-    address: CONTRACTS.PERP_ENGINE!,
+    address: contracts.PERP_ENGINE!,
     abi: PERP_ENGINE_ABI,
     functionName: 'getPositionHealthFactor',
     args: address ? [address] : undefined,
-    enabled: !!address && !!CONTRACTS.PERP_ENGINE,
+    query: { enabled: !!address && !!contracts.PERP_ENGINE },
   });
 
   // Read deposit balance (on-chain). Requires RWA token address (prop or fetch).
   // 读取存入余额（链上），需要 RWA 代币地址（通过 props 或拉取）
   const { data: depositBalance } = useReadContract({
-    address: CONTRACTS.LENDING_POOL!,
+    address: contracts.LENDING_POOL!,
     abi: LENDING_POOL_ABI,
     functionName: 'deposits',
-    args: address && CONTRACTS.ORACLE ? [address, CONTRACTS.ORACLE] : undefined,
-    enabled: !!address && !!CONTRACTS.ORACLE && !!CONTRACTS.LENDING_POOL,
+    args: address && contracts.ORACLE ? [address, contracts.ORACLE] : undefined,
+    query: { enabled: !!address && !!contracts.ORACLE && !!contracts.LENDING_POOL },
   });
 
   // Show loading state during hydration / 水合期间显示加载状态

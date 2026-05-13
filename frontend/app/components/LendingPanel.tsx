@@ -4,11 +4,10 @@ import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { formatEther, parseEther, formatUnits, parseUnits, createPublicClient, http, maxUint256, decodeErrorResult } from 'viem';
-import { CONTRACTS, LENDING_POOL_ABI } from '../lib/contracts';
-import { config } from '../lib/wagmi';
+import { LENDING_POOL_ABI } from '../lib/contracts';
 import { ToastModal, type ToastState } from './ToastModal';
+import { useRuntimeConfig } from '../lib/runtimeConfig';
 
-const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:3001';
 const RWA_SYMBOL = 'NVDA'; // Same as LendingPool stockSymbol / 与 LendingPool stockSymbol 一致
 const LTV = 0.7; // 70%
 
@@ -80,6 +79,7 @@ interface LendingPanelProps {
 export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelProps) {
   const { address } = useAccount();
   const [mounted, setMounted] = useState(false);
+  const { app, contracts } = useRuntimeConfig();
   const [activeTab, setActiveTab] = useState<'deposit' | 'borrow' | 'withdraw' | 'repay'>('deposit');
   const [depositAmount, setDepositAmount] = useState('');
   const [borrowAmount, setBorrowAmount] = useState('');
@@ -119,7 +119,7 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
   // Fetch RWA real-time price (collateral value = Deposit Balance × price) / 拉取 RWA 实时价格（用于 borrow 时抵押价值 = Deposit Balance × 价格）
   useEffect(() => {
     let cancelled = false;
-    fetch(`${BACKEND_API_URL}/api/price/${RWA_SYMBOL}`)
+    fetch(`${app.backendApiUrl}/api/price/${RWA_SYMBOL}`)
       .then((res) => res.ok ? res.json() : null)
       .then((data: { price?: number } | null) => {
         if (!cancelled && data && typeof data.price === 'number') setRwaPriceUsd(data.price);
@@ -130,34 +130,34 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
 
   // Read user deposit balance / 读取用户存入余额
   const { data: depositBalance, refetch: refetchDeposits } = useReadContract({
-    address: CONTRACTS.LENDING_POOL!,
+    address: contracts.LENDING_POOL!,
     abi: LENDING_POOL_ABI,
     functionName: 'deposits',
     args: address && rwaTokenAddress ? [address, rwaTokenAddress] : undefined,
     query: {
-      enabled: !!address && !!rwaTokenAddress && !!CONTRACTS.LENDING_POOL,
+      enabled: !!address && !!rwaTokenAddress && !!contracts.LENDING_POOL,
     },
   });
 
   // Read user borrow balance / 读取用户借款余额
   const { data: borrowBalance, refetch: refetchBorrows } = useReadContract({
-    address: CONTRACTS.LENDING_POOL!,
+    address: contracts.LENDING_POOL!,
     abi: LENDING_POOL_ABI,
     functionName: 'borrows',
     args: address ? [address] : undefined,
     query: {
-      enabled: !!address && !!CONTRACTS.LENDING_POOL,
+      enabled: !!address && !!contracts.LENDING_POOL,
     },
   });
 
   // Read health factor
   const { data: healthFactor, refetch: refetchHealthFactor } = useReadContract({
-    address: CONTRACTS.LENDING_POOL!,
+    address: contracts.LENDING_POOL!,
     abi: LENDING_POOL_ABI,
     functionName: 'getAccountHealthFactor',
     args: address ? [address] : undefined,
     query: {
-      enabled: !!address && !!CONTRACTS.LENDING_POOL,
+      enabled: !!address && !!contracts.LENDING_POOL,
     },
   });
 
@@ -215,7 +215,7 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
       return;
     }
 
-    if (!CONTRACTS.LENDING_POOL) {
+    if (!contracts.LENDING_POOL) {
       console.error('LendingPool contract address not configured');
       showToast({ type: 'error', message: 'LendingPool contract address not configured. Please check .env.local.' });
       return;
@@ -223,7 +223,7 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
 
     try {
       const amount = parseEther(depositAmount);
-      console.log('Starting deposit process:', { amount: depositAmount, rwaTokenAddress, lendingPool: CONTRACTS.LENDING_POOL });
+      console.log('Starting deposit process:', { amount: depositAmount, rwaTokenAddress, lendingPool: contracts.LENDING_POOL });
       
       if (!address) {
         showToast({ type: 'info', message: 'Please connect your wallet first.' });
@@ -240,10 +240,8 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
       }
 
       // Create public client for reading contract state
-      const chain = config.chains[0];
-      const rpcUrl = chain.rpcUrls.default.http[0];
+      const rpcUrl = app.rpcUrl;
       const publicClient = createPublicClient({
-        chain: chain,
         transport: http(rpcUrl),
       });
 
@@ -264,7 +262,7 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
           },
         ],
         functionName: 'allowance',
-        args: [address, CONTRACTS.LENDING_POOL],
+        args: [address, contracts.LENDING_POOL],
       });
 
       console.log('Current allowance:', currentAllowance.toString());
@@ -289,7 +287,7 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
             },
           ],
           functionName: 'approve',
-          args: [CONTRACTS.LENDING_POOL, maxUint256], // Approve max to avoid multiple approvals
+          args: [contracts.LENDING_POOL, maxUint256], // Approve max to avoid multiple approvals
         });
         
         console.log('Approve transaction hash:', approveHash);
@@ -306,7 +304,7 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
       // Then deposit (using depositRWA function)
       console.log('Step 2: Depositing RWA...');
       const depositHash = await writeContractAsync({
-        address: CONTRACTS.LENDING_POOL,
+        address: contracts.LENDING_POOL,
         abi: LENDING_POOL_ABI,
         functionName: 'depositRWA',
         args: [amount],
@@ -328,7 +326,7 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
       return;
     }
 
-    if (!CONTRACTS.LENDING_POOL) {
+    if (!contracts.LENDING_POOL) {
       console.error('LendingPool contract address not configured');
       showToast({ type: 'error', message: 'LendingPool contract address not configured. Please check .env.local.' });
       return;
@@ -353,20 +351,18 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
       return;
     }
 
-    const chain = config.chains[0];
     const publicClient = createPublicClient({
-      chain,
-      transport: http(chain.rpcUrls.default.http[0]),
+      transport: http(app.rpcUrl),
     });
 
     try {
       const amount = parseUnits(borrowAmount, 6); // MockUSD uses 6 decimals
-      console.log('Starting borrow process:', { amount: borrowAmount, lendingPool: CONTRACTS.LENDING_POOL });
+      console.log('Starting borrow process:', { amount: borrowAmount, lendingPool: contracts.LENDING_POOL });
 
       // Simulate first so we 100% capture contract revert reason (no RPC/tx path can hide it)
       try {
         await publicClient.simulateContract({
-          address: CONTRACTS.LENDING_POOL,
+          address: contracts.LENDING_POOL,
           abi: LENDING_POOL_ABI,
           functionName: 'borrowUSD',
           args: [amount],
@@ -382,7 +378,7 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
       }
 
       const borrowHash = await writeContractAsync({
-        address: CONTRACTS.LENDING_POOL,
+        address: contracts.LENDING_POOL,
         abi: LENDING_POOL_ABI,
         functionName: 'borrowUSD',
         args: [amount],
@@ -413,7 +409,7 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
       return;
     }
 
-    if (!CONTRACTS.LENDING_POOL) {
+    if (!contracts.LENDING_POOL) {
       console.error('LendingPool contract address not configured');
       showToast({ type: 'error', message: 'LendingPool contract address not configured. Please check .env.local.' });
       return;
@@ -421,14 +417,14 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
 
     try {
       const amount = parseEther(withdrawAmount);
-      console.log('Starting withdraw process:', { amount: withdrawAmount, lendingPool: CONTRACTS.LENDING_POOL });
+      console.log('Starting withdraw process:', { amount: withdrawAmount, lendingPool: contracts.LENDING_POOL });
       
       if (!writeContractAsync) {
         throw new Error('writeContractAsync is not available. Please check wagmi version.');
       }
       
       const withdrawHash = await writeContractAsync({
-        address: CONTRACTS.LENDING_POOL,
+        address: contracts.LENDING_POOL,
         abi: LENDING_POOL_ABI,
         functionName: 'withdrawRWA',
         args: [amount],
@@ -459,7 +455,7 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
       return;
     }
 
-    if (!CONTRACTS.LENDING_POOL) {
+    if (!contracts.LENDING_POOL) {
       console.error('LendingPool contract address not configured');
       showToast({ type: 'error', message: 'LendingPool contract address not configured. Please check .env.local.' });
       return;
@@ -467,7 +463,7 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
 
     try {
       const amount = parseUnits(repayAmount, 6); // MockUSD uses 6 decimals
-      console.log('Starting repay process:', { amount: repayAmount, usdTokenAddress, lendingPool: CONTRACTS.LENDING_POOL });
+      console.log('Starting repay process:', { amount: repayAmount, usdTokenAddress, lendingPool: contracts.LENDING_POOL });
       
       if (!writeContractAsync) {
         throw new Error('writeContractAsync is not available. Please check wagmi version.');
@@ -490,7 +486,7 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
           },
         ],
         functionName: 'approve',
-        args: [CONTRACTS.LENDING_POOL, amount],
+        args: [contracts.LENDING_POOL, amount],
       });
       
       console.log('Approve transaction hash:', approveHash);
@@ -503,7 +499,7 @@ export function LendingPanel({ rwaTokenAddress, usdTokenAddress }: LendingPanelP
       // Then repay (using repayUSD function)
       console.log('Step 2: Repaying USD...');
       const repayHash = await writeContractAsync({
-        address: CONTRACTS.LENDING_POOL,
+        address: contracts.LENDING_POOL,
         abi: LENDING_POOL_ABI,
         functionName: 'repayUSD',
         args: [amount],

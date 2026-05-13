@@ -8,9 +8,7 @@ import { OracleStatus } from './components/OracleStatus';
 import { LendingPanel } from './components/LendingPanel';
 import { PerpPanel } from './components/PerpPanel';
 import { OHLCV } from './types';
-import { CONTRACTS } from './lib/contracts';
-
-const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:3001';
+import { useRuntimeConfig } from './lib/runtimeConfig';
 
 // 与后端 STOCK_SYMBOLS 默认一致，界面可选多只股票 / Same as backend default, UI can switch between symbols
 const STOCK_SYMBOLS = ['NVDA', 'AAPL', 'TSLA', 'MSFT'] as const;
@@ -45,6 +43,7 @@ export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [mainTab, setMainTab] = useState<'lending' | 'perp'>('lending');
   const [symbol, setSymbol] = useState<StockSymbol>('NVDA');
+  const { app, contracts } = useRuntimeConfig();
 
   // Prevent hydration mismatch / 防止水合不匹配
   useEffect(() => {
@@ -56,7 +55,7 @@ export default function Home() {
     const fetchKlineData = async () => {
       try {
         setLoading(true);
-        const response = await fetch(`${BACKEND_API_URL}/api/ohlcv?symbol=${symbol}&interval=1h&limit=100`);
+        const response = await fetch(`${app.backendApiUrl}/api/ohlcv?symbol=${symbol}&interval=1h&limit=100`);
         if (response.ok) {
           const data = await response.json();
           if (Array.isArray(data) && data.length >= 2) {
@@ -170,14 +169,14 @@ export default function Home() {
           {/* Tab content: only render active panel / 仅渲染当前选中的面板 */}
           {mainTab === 'lending' && (
             <LendingPanel
-              rwaTokenAddress={CONTRACTS.RWA_TOKEN}
-              usdTokenAddress={CONTRACTS.USD_TOKEN}
+              rwaTokenAddress={contracts.RWA_TOKEN}
+              usdTokenAddress={contracts.USD_TOKEN}
             />
           )}
           {mainTab === 'perp' && (
             <PerpPanel
-              rwaTokenAddress={CONTRACTS.RWA_TOKEN}
-              aTokenAddress={CONTRACTS.A_TOKEN}
+              rwaTokenAddress={contracts.RWA_TOKEN}
+              aTokenAddress={contracts.A_TOKEN}
             />
           )}
         </div>

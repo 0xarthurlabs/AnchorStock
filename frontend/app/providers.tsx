@@ -4,7 +4,9 @@ import { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
 import { RainbowKitProvider } from '@rainbow-me/rainbowkit';
-import { config } from './lib/wagmi';
+import { createWagmiConfig } from './lib/wagmi';
+import { RuntimeConfigProvider, useRuntimeConfig } from './lib/runtimeConfig';
+import { getBuildtimeAppConfig } from './lib/appConfig';
 import '@rainbow-me/rainbowkit/styles.css';
 
 // Create QueryClient inside component to avoid sharing between requests
@@ -36,6 +38,7 @@ function getQueryClient() {
 export function Providers({ children }: { children: React.ReactNode }) {
   // Use state to ensure QueryClient is only created once on the client
   const [queryClient] = useState(() => getQueryClient());
+  const [wagmiConfig] = useState(() => createWagmiConfig(getBuildtimeAppConfig()));
 
   // Catch unhandled MetaMask connect rejections to avoid full-page error / 捕获 MetaMask 连接失败等未处理的 Promise rejection，避免整页报错
   useEffect(() => {
@@ -54,12 +57,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <WagmiProvider config={config}>
-      <QueryClientProvider client={queryClient}>
-        <RainbowKitProvider>
-          {children}
-        </RainbowKitProvider>
-      </QueryClientProvider>
-    </WagmiProvider>
+    <RuntimeConfigProvider>
+      <WagmiProvider config={wagmiConfig}>
+        <QueryClientProvider client={queryClient}>
+          <RainbowKitProvider>{children}</RainbowKitProvider>
+        </QueryClientProvider>
+      </WagmiProvider>
+    </RuntimeConfigProvider>
   );
 }

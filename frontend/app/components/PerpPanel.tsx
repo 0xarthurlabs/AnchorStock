@@ -3,11 +3,10 @@
 import { useState, useEffect } from 'react';
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { formatEther, parseEther, createPublicClient, http, maxUint256 } from 'viem';
-import { CONTRACTS, LENDING_POOL_ABI, PERP_ENGINE_ABI } from '../lib/contracts';
-import { config } from '../lib/wagmi';
+import { LENDING_POOL_ABI, PERP_ENGINE_ABI } from '../lib/contracts';
 import { ToastModal, type ToastState } from './ToastModal';
+import { useRuntimeConfig } from '../lib/runtimeConfig';
 
-const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:3001';
 const RWA_SYMBOL = 'NVDA'; // Same as PerpEngine stockSymbol / 与 PerpEngine stockSymbol 一致
 
 // Initial margin rate (10%) for frontend validation / 初始保证金率（10%）用于前端校验
@@ -28,6 +27,7 @@ interface PerpPanelProps {
 export function PerpPanel({ rwaTokenAddress, aTokenAddress: aTokenAddressProp }: PerpPanelProps) {
   const { address } = useAccount();
   const [mounted, setMounted] = useState(false);
+  const { app, contracts } = useRuntimeConfig();
   const [activeTab, setActiveTab] = useState<'open' | 'close' | 'add' | 'withdraw'>('open');
   const [side, setSide] = useState<0 | 1>(SIDE_LONG);
   const [openSize, setOpenSize] = useState('');
@@ -54,18 +54,18 @@ export function PerpPanel({ rwaTokenAddress, aTokenAddress: aTokenAddressProp }:
 
   // Resolve aToken address: prop, or from LendingPool.aTokens(rwaToken) / 解析 aToken 地址
   const { data: aTokenFromPool } = useReadContract({
-    address: CONTRACTS.LENDING_POOL,
+    address: contracts.LENDING_POOL,
     abi: LENDING_POOL_ABI,
     functionName: 'aTokens',
     args: rwaTokenAddress ? [rwaTokenAddress] : undefined,
-    query: { enabled: !!CONTRACTS.LENDING_POOL && !!rwaTokenAddress && !aTokenAddressProp },
+    query: { enabled: !!contracts.LENDING_POOL && !!rwaTokenAddress && !aTokenAddressProp },
   });
   const aTokenAddress = (aTokenAddressProp ?? (aTokenFromPool as `0x${string}` | undefined)) as `0x${string}` | undefined;
 
   // Fetch mark price for display / 拉取标记价格
   useEffect(() => {
     let cancelled = false;
-    fetch(`${BACKEND_API_URL}/api/price/${RWA_SYMBOL}`)
+    fetch(`${app.backendApiUrl}/api/price/${RWA_SYMBOL}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data: { price?: number } | null) => {
         if (!cancelled && data && typeof data.price === 'number') setMarkPrice(data.price);
@@ -76,19 +76,19 @@ export function PerpPanel({ rwaTokenAddress, aTokenAddress: aTokenAddressProp }:
 
   // Read position / 读取仓位
   const { data: positionData, refetch: refetchPosition } = useReadContract({
-    address: CONTRACTS.PERP_ENGINE,
+    address: contracts.PERP_ENGINE,
     abi: PERP_ENGINE_ABI,
     functionName: 'positions',
     args: address ? [address] : undefined,
-    query: { enabled: !!address && !!CONTRACTS.PERP_ENGINE },
+    query: { enabled: !!address && !!contracts.PERP_ENGINE },
   });
 
   const { data: healthFactor } = useReadContract({
-    address: CONTRACTS.PERP_ENGINE,
+    address: contracts.PERP_ENGINE,
     abi: PERP_ENGINE_ABI,
     functionName: 'getPositionHealthFactor',
     args: address ? [address] : undefined,
-    query: { enabled: !!address && !!CONTRACTS.PERP_ENGINE },
+    query: { enabled: !!address && !!contracts.PERP_ENGINE },
   }); // Read health factor / 读取健康因子
 
   // aToken balance (collateral available to open/add) / aToken 余额（可用于开仓/加保）
@@ -132,21 +132,20 @@ export function PerpPanel({ rwaTokenAddress, aTokenAddress: aTokenAddressProp }:
 
   // Ensure aToken allowance for PerpEngine, approve if needed / 确保 PerpEngine 有 aToken 授权，不足则先 approve
   const ensureApproval = async (amount: bigint) => {
-    if (!aTokenAddress || !CONTRACTS.PERP_ENGINE || !address) return;
-    const chain = config.chains[0];
-    const publicClient = createPublicClient({ chain, transport: http(chain.rpcUrls.default.http[0]) });
+    if (!aTokenAddress || !contracts.PERP_ENGINE || !address) return;
+    const publicClient = createPublicClient({ transport: http(app.rpcUrl) });
     const currentAllowance = await publicClient.readContract({
       address: aTokenAddress,
       abi: [{ inputs: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }], name: 'allowance', outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' }],
       functionName: 'allowance',
-      args: [address, CONTRACTS.PERP_ENGINE],
+      args: [address, contracts.PERP_ENGINE],
     });
     if (currentAllowance < amount) {
       const approveHash = await writeContractAsync({
         address: aTokenAddress,
         abi: [{ inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }], name: 'approve', outputs: [{ name: '', type: 'bool' }], stateMutability: 'nonpayable', type: 'function' }],
         functionName: 'approve',
-        args: [CONTRACTS.PERP_ENGINE, maxUint256],
+        args: [contracts.PERP_ENGINE, maxUint256],
       });
       showToast({ type: 'info', title: 'Approval submitted', message: 'Wait for confirmation, then retry.', txHash: approveHash });
       await publicClient.waitForTransactionReceipt({ hash: approveHash as `0x${string}` });
@@ -156,7 +155,7 @@ export function PerpPanel({ rwaTokenAddress, aTokenAddress: aTokenAddressProp }:
   // Open long/short position with size and collateral / 开多/空仓，传入 size 与保证金
   const handleOpenPosition = async () => {
     setOpenError(null);
-    if (!CONTRACTS.PERP_ENGINE || !aTokenAddress) {
+    if (!contracts.PERP_ENGINE || !aTokenAddress) {
       showToast({ type: 'error', message: 'PerpEngine or aToken address not configured.' });
       return;
     }
@@ -192,7 +191,7 @@ export function PerpPanel({ rwaTokenAddress, aTokenAddress: aTokenAddressProp }:
     try {
       await ensureApproval(collateralAmount);
       const txHash = await writeContractAsync({
-        address: CONTRACTS.PERP_ENGINE,
+        address: contracts.PERP_ENGINE,
         abi: PERP_ENGINE_ABI,
         functionName: 'openPosition',
         args: [side, size, collateralAmount],
@@ -211,7 +210,7 @@ export function PerpPanel({ rwaTokenAddress, aTokenAddress: aTokenAddressProp }:
   // Close position (full or partial by size) / 平仓（全部或按 size 部分平仓）
   const handleClosePosition = async () => {
     setCloseError(null);
-    if (!CONTRACTS.PERP_ENGINE) {
+    if (!contracts.PERP_ENGINE) {
       showToast({ type: 'error', message: 'PerpEngine not configured.' });
       return;
     }
@@ -236,7 +235,7 @@ export function PerpPanel({ rwaTokenAddress, aTokenAddress: aTokenAddressProp }:
     }
     try {
       const txHash = await writeContractAsync({
-        address: CONTRACTS.PERP_ENGINE,
+        address: contracts.PERP_ENGINE,
         abi: PERP_ENGINE_ABI,
         functionName: 'closePosition',
         args: [sizeToClose],
@@ -253,7 +252,7 @@ export function PerpPanel({ rwaTokenAddress, aTokenAddress: aTokenAddressProp }:
 
   const handleAddCollateral = async () => {
     setAddError(null);
-    if (!CONTRACTS.PERP_ENGINE || !aTokenAddress) {
+    if (!contracts.PERP_ENGINE || !aTokenAddress) {
       showToast({ type: 'error', message: 'PerpEngine or aToken not configured.' });
       return;
     }
@@ -271,7 +270,7 @@ export function PerpPanel({ rwaTokenAddress, aTokenAddress: aTokenAddressProp }:
     try {
       await ensureApproval(amount);
       const txHash = await writeContractAsync({
-        address: CONTRACTS.PERP_ENGINE,
+        address: contracts.PERP_ENGINE,
         abi: PERP_ENGINE_ABI,
         functionName: 'addCollateral',
         args: [amount],
@@ -289,7 +288,7 @@ export function PerpPanel({ rwaTokenAddress, aTokenAddress: aTokenAddressProp }:
   // Withdraw collateral from position (within safe limit) / 从仓位提取保证金（在安全范围内）
   const handleWithdrawCollateral = async () => {
     setWithdrawError(null);
-    if (!CONTRACTS.PERP_ENGINE) {
+    if (!contracts.PERP_ENGINE) {
       showToast({ type: 'error', message: 'PerpEngine not configured.' });
       return;
     }
@@ -309,7 +308,7 @@ export function PerpPanel({ rwaTokenAddress, aTokenAddress: aTokenAddressProp }:
     }
     try {
       const txHash = await writeContractAsync({
-        address: CONTRACTS.PERP_ENGINE,
+        address: contracts.PERP_ENGINE,
         abi: PERP_ENGINE_ABI,
         functionName: 'withdrawCollateral',
         args: [amount],
@@ -341,7 +340,7 @@ export function PerpPanel({ rwaTokenAddress, aTokenAddress: aTokenAddressProp }:
     );
   }
 
-  if (!CONTRACTS.PERP_ENGINE) {
+  if (!contracts.PERP_ENGINE) {
     return (
       <div className="bg-white dark:bg-gray-800 rounded-lg p-6 border border-gray-200 dark:border-gray-700">
         <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">

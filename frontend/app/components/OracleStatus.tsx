@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { useReadContract } from 'wagmi';
-import { CONTRACTS, ORACLE_ABI } from '../lib/contracts';
+import { ORACLE_ABI } from '../lib/contracts';
 import { formatEther } from 'viem';
+import { useRuntimeConfig } from '../lib/runtimeConfig';
 
-const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:3001';
 const DEFAULT_SYMBOL = 'NVDA';
 
 interface BackendPrice {
@@ -23,6 +23,7 @@ interface OracleStatusProps {
 export function OracleStatus({ symbol = DEFAULT_SYMBOL }: OracleStatusProps) {
   const [mounted, setMounted] = useState(false);
   const [backendPrice, setBackendPrice] = useState<BackendPrice | null>(null);
+  const { app, contracts } = useRuntimeConfig();
 
   useEffect(() => {
     setMounted(true);
@@ -32,7 +33,7 @@ export function OracleStatus({ symbol = DEFAULT_SYMBOL }: OracleStatusProps) {
   useEffect(() => {
     const fetchBackendPrice = async () => {
       try {
-        const res = await fetch(`${BACKEND_API_URL}/api/price/${symbol}`);
+        const res = await fetch(`${app.backendApiUrl}/api/price/${symbol}`);
         if (res.ok) {
           const data = await res.json();
           setBackendPrice({
@@ -53,15 +54,14 @@ export function OracleStatus({ symbol = DEFAULT_SYMBOL }: OracleStatusProps) {
     return () => clearInterval(interval);
   }, [symbol]);
 
-  const oracleAddress = (CONTRACTS.ORACLE ??
+  const oracleAddress = (contracts.ORACLE ??
     '0x0000000000000000000000000000000000000000') as `0x${string}`;
-  const enabled = !!CONTRACTS.ORACLE && mounted;
+  const enabled = !!contracts.ORACLE && mounted;
 
   const { data: strategy } = useReadContract({
     address: oracleAddress,
     abi: ORACLE_ABI,
     functionName: 'oracleStrategy',
-    // @ts-expect-error - runtime is fine, TypeScript types may differ
     query: { enabled },
   });
 
@@ -70,7 +70,6 @@ export function OracleStatus({ symbol = DEFAULT_SYMBOL }: OracleStatusProps) {
     abi: ORACLE_ABI,
     functionName: 'getPrice',
     args: [symbol],
-    // @ts-expect-error - see above
     query: { enabled },
   });
 
@@ -79,7 +78,6 @@ export function OracleStatus({ symbol = DEFAULT_SYMBOL }: OracleStatusProps) {
     abi: ORACLE_ABI,
     functionName: 'isPriceStale',
     args: [symbol],
-    // @ts-expect-error - see above
     query: { enabled },
   });
 
@@ -116,7 +114,7 @@ export function OracleStatus({ symbol = DEFAULT_SYMBOL }: OracleStatusProps) {
   }
 
   // If oracle address is not configured, show a friendly message / 未配置 oracle 地址时显示提示
-  if (!CONTRACTS.ORACLE) {
+  if (!contracts.ORACLE) {
     return (
       <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Oracle Status</h2>
