@@ -172,12 +172,11 @@ jobs:
               -t "${PREFIX}/${IMG}:${TAG}" \
               "${ROOT}"
             docker push "${PREFIX}/${IMG}:${TAG}"
-          done <<'EOF'
-relayer:anchorstock-relayer
-ohlcv-consumer:anchorstock-ohlcv-consumer
-oracle-consumer:anchorstock-oracle-consumer
-liquidation-bot:anchorstock-liquidation-bot
-EOF
+          done < <(printf '%s\n' \
+            'relayer:anchorstock-relayer' \
+            'ohlcv-consumer:anchorstock-ohlcv-consumer' \
+            'oracle-consumer:anchorstock-oracle-consumer' \
+            'liquidation-bot:anchorstock-liquidation-bot')
 
       - name: Write docker/.env.workers on VM and restart workers
         uses: appleboy/ssh-action@v1.0.3
