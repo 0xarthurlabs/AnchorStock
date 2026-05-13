@@ -111,7 +111,6 @@ jobs:
         uses: crytic/slither-action@v0.4.0
         with:
           target: contracts
+          # detectors_to_exclude in contracts/slither.config.json (pyth-unchecked crashes older Slither; CLI has no --exclude-detectors here)
           slither-config: contracts/slither.config.json
-          # Exclude crashes Slither 0.9.x pyth_unchecked detector (AssertionError on StockOracle); still run all other detectors.
-          slither-args: --exclude-detectors pyth-unchecked
           fail-on: medium

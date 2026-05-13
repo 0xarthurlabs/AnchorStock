@@ -36,25 +36,37 @@ contract VerifyScript is Script {
         console.log("Run the following commands (replace <CHAIN_ID> with your chain, e.g. 1328 for Sei testnet):");
         console.log("");
         if (mockPyth != address(0)) {
-            console.log("forge verify-contract", mockPyth, "src/mocks/MockPyth.sol:MockPyth --chain-id <CHAIN_ID> --watch");
+            console.log(
+                "forge verify-contract", mockPyth, "src/mocks/MockPyth.sol:MockPyth --chain-id <CHAIN_ID> --watch"
+            );
         }
         if (oracle != address(0)) {
-            console.log("forge verify-contract", oracle, "src/StockOracle.sol:StockOracle --chain-id <CHAIN_ID> --watch");
+            console.log(
+                "forge verify-contract", oracle, "src/StockOracle.sol:StockOracle --chain-id <CHAIN_ID> --watch"
+            );
         }
         if (rwaToken != address(0)) {
-            console.log("forge verify-contract", rwaToken, "src/tokens/USStockRWA.sol:USStockRWA --chain-id <CHAIN_ID> --watch");
+            console.log(
+                "forge verify-contract", rwaToken, "src/tokens/USStockRWA.sol:USStockRWA --chain-id <CHAIN_ID> --watch"
+            );
         }
         if (usdToken != address(0)) {
-            console.log("forge verify-contract", usdToken, "src/tokens/MockUSD.sol:MockUSD --chain-id <CHAIN_ID> --watch");
+            console.log(
+                "forge verify-contract", usdToken, "src/tokens/MockUSD.sol:MockUSD --chain-id <CHAIN_ID> --watch"
+            );
         }
         if (lendingPool != address(0)) {
-            console.log("forge verify-contract", lendingPool, "src/LendingPool.sol:LendingPool --chain-id <CHAIN_ID> --watch");
+            console.log(
+                "forge verify-contract", lendingPool, "src/LendingPool.sol:LendingPool --chain-id <CHAIN_ID> --watch"
+            );
         }
         if (aToken != address(0)) {
             console.log("forge verify-contract", aToken, "src/tokens/aToken.sol:aToken --chain-id <CHAIN_ID> --watch");
         }
         if (perpEngine != address(0)) {
-            console.log("forge verify-contract", perpEngine, "src/PerpEngine.sol:PerpEngine --chain-id <CHAIN_ID> --watch");
+            console.log(
+                "forge verify-contract", perpEngine, "src/PerpEngine.sol:PerpEngine --chain-id <CHAIN_ID> --watch"
+            );
         }
         console.log("");
         console.log("Set ETHERSCAN_API_KEY or block explorer API key in .env before running.");
