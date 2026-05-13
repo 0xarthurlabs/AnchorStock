@@ -1,6 +1,11 @@
-# Build worker images, push to GAR, SSH to VM: write docker/.env.workers from Environment, then compose pull/up.
+# Build worker images, push to GAR, scp docker-compose.workers.yml to VM, then SSH to write
+# docker/.env.workers from Environment and run compose pull/up.
 #
-# VM must: Docker + gcloud auth for Artifact Registry; repo clone at VM_REPO_DIR.
+# VM requirements:
+#   - Docker engine + Compose (v2 plugin `docker compose` preferred; v1 binary `docker-compose` accepted)
+#   - VM service account / login authenticated to pull from Artifact Registry (gcloud auth configure-docker)
+#   - VM_REPO_DIR exists (any plain directory, NOT required to be a git clone); workflow scp's the
+#     compose file into ${VM_REPO_DIR}/docker/docker-compose.workers.yml on every run.
 #
 # Contract addresses: read from contracts/deployments/<deploy_env>/<chain_id>.json (ORACLE, LENDING_POOL, PERP_ENGINE).
 # If missing or zero address, falls back to Environment variables WORKER_ORACLE_CONTRACT_ADDRESS,
@@ -178,6 +183,16 @@ jobs:
             'oracle-consumer:anchorstock-oracle-consumer' \
             'liquidation-bot:anchorstock-liquidation-bot')
 
+      - name: Upload worker compose file to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VM_SSH_HOST }}
+          username: ${{ secrets.VM_SSH_USER }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          source: "docker/docker-compose.workers.yml"
+          target: ${{ vars.VM_REPO_DIR }}
+          overwrite: true
+
       - name: Write docker/.env.workers on VM and restart workers
         uses: appleboy/ssh-action@v1.0.3
         env:
@@ -213,31 +228,12 @@ jobs:
             set -euo pipefail
             cd "${REPO_DIR}"
             umask 077
-            # Sync VM working tree to the exact commit being deployed so the
-            # checked-in compose file / Dockerfiles match the pushed images.
-            if [ ! -d .git ]; then
-              echo "ERROR: ${REPO_DIR} is not a git checkout (no .git). Set VM_REPO_DIR to a clone of the repo." >&2
-              exit 1
-            fi
-            if ! git fetch --quiet --tags origin; then
-              echo "ERROR: 'git fetch origin' failed on VM. Check origin remote and VM auth (deploy key / PAT) for the repo." >&2
-              exit 1
-            fi
-            if ! git cat-file -e "${TAG}^{commit}" 2>/dev/null; then
-              echo "ERROR: commit ${TAG} not reachable from VM clone after fetch." >&2
-              echo "Make sure the commit is pushed and the VM has read access to the remote." >&2
-              exit 1
-            fi
-            # Force-detach to the exact deploy commit, wiping any local edits in the VM clone.
-            git checkout --quiet --force --detach "${TAG}"
-            # Drop untracked files under docker/ (gitignored files like docker/.env.workers are preserved).
-            git clean -fd -- docker/
-            if [ ! -f docker/docker-compose.workers.yml ]; then
-              echo "ERROR: docker/docker-compose.workers.yml not present at commit ${TAG}." >&2
-              echo "Commit the file to the repo and re-run the workflow." >&2
-              exit 1
-            fi
             mkdir -p docker
+            # The compose file is uploaded by the preceding scp step; the env file is regenerated below.
+            if [ ! -f docker/docker-compose.workers.yml ]; then
+              echo "ERROR: docker/docker-compose.workers.yml not found at ${REPO_DIR}/docker/. The scp step should have uploaded it." >&2
+              exit 1
+            fi
             {
               printf '%s\n' "KAFKA_BROKER=${KAFKA_BROKER}"
               printf '%s\n' "KAFKA_TOPIC_PRICE=${KAFKA_TOPIC_PRICE}"
