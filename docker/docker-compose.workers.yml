@@ -1,0 +1,43 @@
+# AnchorStock chain-side workers (run on VM next to docker-compose.yml stack).
+# Prerequisites on VM:
+#   - Repo clone with this file; docker/.env.workers (gitignored): from CI on each deploy, or copy from .env.workers.example for manual runs.
+#   - WORKER_IMAGE_PREFIX + WORKER_IMAGE_TAG set (CI SSH step exports them before pull).
+#   - VM service account can pull from Artifact Registry (gcloud auth configure-docker).
+#
+# Example:
+#   export WORKER_IMAGE_PREFIX=us-west1-docker.pkg.dev/PROJECT/REPO
+#   export WORKER_IMAGE_TAG=main
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.workers.yml up -d
+
+services:
+  relayer:
+    image: ${WORKER_IMAGE_PREFIX}/anchorstock-relayer:${WORKER_IMAGE_TAG}
+    container_name: anchorstock_relayer
+    env_file:
+      - ${WORKER_ENV_FILE:-.env.workers}
+    restart: unless-stopped
+    network_mode: host
+
+  ohlcv-consumer:
+    image: ${WORKER_IMAGE_PREFIX}/anchorstock-ohlcv-consumer:${WORKER_IMAGE_TAG}
+    container_name: anchorstock_ohlcv_consumer
+    env_file:
+      - ${WORKER_ENV_FILE:-.env.workers}
+    restart: unless-stopped
+    network_mode: host
+
+  oracle-consumer:
+    image: ${WORKER_IMAGE_PREFIX}/anchorstock-oracle-consumer:${WORKER_IMAGE_TAG}
+    container_name: anchorstock_oracle_consumer
+    env_file:
+      - ${WORKER_ENV_FILE:-.env.workers}
+    restart: unless-stopped
+    network_mode: host
+
+  liquidation-bot:
+    image: ${WORKER_IMAGE_PREFIX}/anchorstock-liquidation-bot:${WORKER_IMAGE_TAG}
+    container_name: anchorstock_liquidation_bot
+    env_file:
+      - ${WORKER_ENV_FILE:-.env.workers}
+    restart: unless-stopped
+    network_mode: host
