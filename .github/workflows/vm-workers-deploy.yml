@@ -237,8 +237,21 @@ jobs:
             } > docker/.env.workers
             export WORKER_IMAGE_PREFIX="${PREFIX}"
             export WORKER_IMAGE_TAG="${TAG}"
-            docker compose -f docker/docker-compose.workers.yml pull
-            docker compose -f docker/docker-compose.workers.yml up -d
+            # Pick Compose CLI: prefer v2 plugin ("docker compose"), fall back to v1 binary ("docker-compose").
+            if docker compose version >/dev/null 2>&1; then
+              DC=(docker compose)
+            elif command -v docker-compose >/dev/null 2>&1; then
+              DC=(docker-compose)
+            else
+              echo "ERROR: Neither 'docker compose' (v2 plugin) nor 'docker-compose' (v1) is available on this VM." >&2
+              echo "Install one of:" >&2
+              echo "  apt-get install -y docker-compose-plugin   # v2 plugin (recommended)" >&2
+              echo "  apt-get install -y docker-compose          # v1 standalone" >&2
+              exit 1
+            fi
+            echo "Using Compose CLI: ${DC[*]}"
+            "${DC[@]}" -f docker/docker-compose.workers.yml pull
+            "${DC[@]}" -f docker/docker-compose.workers.yml up -d
 
       - name: Audit summary
         if: always()
