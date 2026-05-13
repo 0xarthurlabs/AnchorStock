@@ -43,6 +43,8 @@ import {MockPyth} from "../src/mocks/MockPyth.sol";
  * 4) 部署结果 / After deployment
  *    - 合约地址会写入 broadcast/Deploy.s.sol/<chainId>/run-latest.json
  *      Contract addresses are written to broadcast/Deploy.s.sol/<chainId>/run-latest.json
+ *    - 若 WRITE_DEPLOYMENT_ARTIFACT 为 true（默认）：再写入 deployments/<DEPLOY_ENV>/<chainId>.json
+ *      （ORACLE、LENDING_POOL、… 供协调发布 / 前端加载；DEPLOY_ENV、CHAIN_ID 由 CI 注入）
  *    - 将输出的 MockPyth、StockOracle、USStockRWA、MockUSD、LendingPool、aToken、PerpEngine 地址填入前端 .env
  *      Copy MockPyth, StockOracle, USStockRWA, MockUSD, LendingPool, aToken, PerpEngine addresses to frontend .env
  *    - 可选：运行 Verify.s.sol 生成区块浏览器验证命令 / Optional: run Verify.s.sol to get verification commands
@@ -148,6 +150,24 @@ contract DeployScript is Script {
         console.log("Minted 10M USD to LendingPool");
 
         vm.stopBroadcast();
+
+        // 链下消费的 deployments JSON（与 contracts-testnet-deploy / coordinated 工作流一致）
+        bool writeArtifact = vm.envOr("WRITE_DEPLOYMENT_ARTIFACT", true);
+        if (writeArtifact) {
+            string memory deployEnv = vm.envOr("DEPLOY_ENV", string("dev"));
+            string memory out = string.concat("deployments/", deployEnv, "/", vm.toString(block.chainid), ".json");
+            string memory root = "artifact";
+            root = vm.serializeString(root, "env", deployEnv);
+            root = vm.serializeUint(root, "chainId", block.chainid);
+            root = vm.serializeAddress(root, "ORACLE", oracle);
+            root = vm.serializeAddress(root, "LENDING_POOL", lendingPool);
+            root = vm.serializeAddress(root, "PERP_ENGINE", perpEngine);
+            root = vm.serializeAddress(root, "RWA_TOKEN", rwaToken);
+            root = vm.serializeAddress(root, "USD_TOKEN", usdToken);
+            root = vm.serializeAddress(root, "A_TOKEN", aToken);
+            vm.writeJson(root, out);
+            console.log("Deployment artifact:", out);
+        }
 
         // 输出部署结果 / Output deployment results
         console.log("\n=== Deployment Summary ===");
