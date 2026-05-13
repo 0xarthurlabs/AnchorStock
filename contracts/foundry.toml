@@ -2,6 +2,8 @@
 src = "src"
 out = "out"
 libs = ["lib"]
+# Deploy.s.sol writes deployments/<env>/<chainId>.json via vm.writeJson (broadcast + CI)
+fs_permissions = [{ access = "read-write", path = "./deployments" }]
 # 禁用 fork 模式以避免 archive 节点要求 / Disable fork mode to avoid archive node requirement
 no_storage_caching = true
 # RPC 超时请用命令行传入：forge script ... --timeout 300
