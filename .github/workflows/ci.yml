@@ -111,6 +111,6 @@ jobs:
         uses: crytic/slither-action@v0.4.0
         with:
           target: contracts
-          # detectors_to_exclude in contracts/slither.config.json (pyth-unchecked crashes older Slither; CLI has no --exclude-detectors here)
-          slither-config: contracts/slither.config.json
+          slither-version: "0.10.4"
           fail-on: medium
+          slither-args: --exclude divide-before-multiply,incorrect-equality,pyth-deprecated-functions
