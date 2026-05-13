@@ -2,3 +2,9 @@
 
 .cursorrules
 /.vscode
+
+# 本地 Alertmanager 覆盖（含真实 Webhook，勿提交）
+docker/alertmanager/alertmanager.local.yml
+
+# VM workers env (copy from docker/.env.workers.example)
+docker/.env.workers
