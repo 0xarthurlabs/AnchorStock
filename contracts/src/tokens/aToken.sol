@@ -5,7 +5,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
- * @title aToken
+ * @title AToken
  * @author AnchorStock
  * @notice 存款凭证代币，代表用户在借贷池中的存款 / Deposit receipt token representing user deposits in lending pool
  * @dev 使用 ERC20 标准，18 位精度 / Uses ERC20 standard with 18 decimals
@@ -32,17 +32,19 @@ contract aToken is ERC20, Ownable {
 
     /**
      * @notice 构造函数 / Constructor
-     * @param _name 代币名称（如 "Anchor NVDA"）/ Token name (e.g., "Anchor NVDA")
-     * @param _symbol 代币符号（如 "aNVDA"）/ Token symbol (e.g., "aNVDA")
-     * @param _underlyingAsset 底层资产地址 / Underlying asset address
-     * @param _owner 合约所有者（通常是 LendingPool）/ Contract owner (usually LendingPool)
+     * @param tokenName 代币名称（如 "Anchor NVDA"）/ Token name (e.g., "Anchor NVDA")
+     * @param tokenSymbol 代币符号（如 "aNVDA"）/ Token symbol (e.g., "aNVDA")
+     * @param underlyingAssetAddr 底层资产地址 / Underlying asset address
+     * @param initialOwner 合约所有者（通常是 LendingPool）/ Contract owner (usually LendingPool)
      */
-    constructor(string memory _name, string memory _symbol, address _underlyingAsset, address _owner)
-        ERC20(_name, _symbol)
-        Ownable(_owner)
-    {
-        require(_underlyingAsset != address(0), "aToken: invalid underlying asset");
-        underlyingAsset = _underlyingAsset;
+    constructor(
+        string memory tokenName,
+        string memory tokenSymbol,
+        address underlyingAssetAddr,
+        address initialOwner
+    ) ERC20(tokenName, tokenSymbol) Ownable(initialOwner) {
+        require(underlyingAssetAddr != address(0), "aToken: invalid underlying asset");
+        underlyingAsset = underlyingAssetAddr;
     }
 
     /**

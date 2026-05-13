@@ -16,8 +16,8 @@ contract StockOracle is Ownable {
 
     /// @notice Oracle 策略枚举 / Oracle strategy enum
     enum OracleStrategy {
-        PYTH, // 使用 Pyth Network (Pull 模型) / Use Pyth Network (Pull model)
-        CUSTOM_RELAYER // 使用自定义中继器 (Push 模型) / Use custom relayer (Push model)
+        PYTH,
+        CUSTOM_RELAYER
     }
 
     /// @notice 当前使用的 Oracle 策略 / Current oracle strategy
@@ -59,37 +59,29 @@ contract StockOracle is Ownable {
     /// @notice 错误：无效的价格 / Error: Invalid price
     error InvalidPrice();
 
-    /// @notice 检查失败事件：无效的 owner / Check failed: invalid owner
     event CheckFailedInvalidOwner(address value);
-    /// @notice 检查失败事件：价格未设置或为 0 / Check failed: price not set or zero
     event CheckFailedPriceNotSet(string symbol, uint256 value);
-    /// @notice 检查失败事件：数组长度不匹配 / Check failed: arrays length mismatch
     event CheckFailedArraysLengthMismatch(uint256 lengthSymbols, uint256 lengthPrices);
-    /// @notice 检查失败事件：价格 ID 未设置 / Check failed: price ID not set
     event CheckFailedPriceIdNotSet(string symbol);
-    /// @notice 检查失败事件：Pyth 价格无效 / Check failed: invalid Pyth price
     event CheckFailedInvalidPythPrice(bytes32 priceId, int64 price);
-    /// @notice 检查失败事件：价格过期（断路器）/ Check failed: price stale (circuit breaker)
     event CheckFailedPriceStale(string symbol, uint256 timestamp, uint256 threshold);
 
     /**
      * @notice 构造函数 / Constructor
-     * @param _pyth Pyth Network 合约地址 / Pyth Network contract address
-     * @param _owner 合约所有者地址（使用 OpenZeppelin Ownable）/ Contract owner address (using OpenZeppelin Ownable)
+     * @param pythAddr Pyth Network 合约地址 / Pyth Network contract address
+     * @param initialOwner 合约所有者地址 / Contract owner address
      */
-    constructor(address _pyth, address _owner) Ownable(_owner) {
-        if (_owner == address(0)) {
-            emit CheckFailedInvalidOwner(_owner);
+    constructor(address pythAddr, address initialOwner) Ownable(initialOwner) {
+        if (initialOwner == address(0)) {
+            emit CheckFailedInvalidOwner(initialOwner);
             require(false, "StockOracle: invalid owner");
         }
-        pyth = IPyth(_pyth);
-        oracleStrategy = OracleStrategy.CUSTOM_RELAYER; // 默认使用 Custom Relayer / Default to Custom Relayer
+        pyth = IPyth(pythAddr);
+        oracleStrategy = OracleStrategy.CUSTOM_RELAYER;
     }
 
     /**
      * @notice 设置股票符号的 Pyth 价格 ID / Set Pyth price ID for stock symbol
-     * @param symbol 股票符号（如 "AAPL"）/ Stock symbol (e.g., "AAPL")
-     * @param priceId Pyth 价格 ID / Pyth price ID
      */
     function setStockPriceId(string memory symbol, bytes32 priceId) external onlyOwner {
         stockPriceIds[symbol] = priceId;
@@ -97,36 +89,31 @@ contract StockOracle is Ownable {
 
     /**
      * @notice 切换 Oracle 策略 / Switch oracle strategy
-     * @param _strategy 新的策略 / New strategy
      */
-    function setOracleStrategy(OracleStrategy _strategy) external onlyOwner {
+    function setOracleStrategy(OracleStrategy newStrategy) external onlyOwner {
         OracleStrategy oldStrategy = oracleStrategy;
-        oracleStrategy = _strategy;
-        emit OracleStrategySwitched(oldStrategy, _strategy);
+        oracleStrategy = newStrategy;
+        emit OracleStrategySwitched(oldStrategy, newStrategy);
     }
 
     /**
      * @notice 设置价格过期阈值 / Set stale price threshold
-     * @param _threshold 新的阈值（秒）/ New threshold (seconds)
      */
-    function setStalePriceThreshold(uint256 _threshold) external onlyOwner {
+    function setStalePriceThreshold(uint256 newThreshold) external onlyOwner {
         uint256 oldThreshold = stalePriceThreshold;
-        stalePriceThreshold = _threshold;
-        emit StalePriceThresholdUpdated(oldThreshold, _threshold);
+        stalePriceThreshold = newThreshold;
+        emit StalePriceThresholdUpdated(oldThreshold, newThreshold);
     }
 
     /**
      * @notice 设置断路器模式 / Set circuit breaker mode
-     * @param _enabled 是否启用 / Whether to enable
      */
-    function setCircuitBreaker(bool _enabled) external onlyOwner {
-        circuitBreakerEnabled = _enabled;
+    function setCircuitBreaker(bool newEnabled) external onlyOwner {
+        circuitBreakerEnabled = newEnabled;
     }
 
     /**
      * @notice 更新价格（Custom Relayer 策略使用）/ Update price (for Custom Relayer strategy)
-     * @param symbol 股票符号 / Stock symbol
-     * @param price 价格（8位精度）/ Price (8 decimals)
      */
     function updatePrice(string memory symbol, uint256 price) external onlyOwner {
         if (price == 0) {
@@ -134,7 +121,6 @@ contract StockOracle is Ownable {
             revert InvalidPrice();
         }
 
-        // 保存原始价格（8位精度）/ Save raw price (8 decimals)
         stockPrices[symbol] = price;
         lastUpdatedAt[symbol] = block.timestamp;
 
@@ -143,8 +129,6 @@ contract StockOracle is Ownable {
 
     /**
      * @notice 批量更新价格 / Batch update prices
-     * @param symbols 股票符号数组 / Array of stock symbols
-     * @param prices 价格数组（8位精度）/ Array of prices (8 decimals)
      */
     function updatePrices(string[] memory symbols, uint256[] memory prices) external onlyOwner {
         if (symbols.length != prices.length) {
@@ -165,15 +149,11 @@ contract StockOracle is Ownable {
 
     /**
      * @notice 获取股票价格（归一化到 18 位精度）/ Get stock price (normalized to 18 decimals)
-     * @param symbol 股票符号 / Stock symbol
-     * @return normalizedPrice 归一化后的价格（18位精度）/ Normalized price (18 decimals)
-     * @return timestamp 最后更新时间戳 / Last update timestamp
      */
     function getPrice(string memory symbol) public view returns (uint256 normalizedPrice, uint256 timestamp) {
         uint256 rawPrice;
 
         if (oracleStrategy == OracleStrategy.PYTH) {
-            // 从 Pyth Network 拉取价格 / Pull price from Pyth Network
             bytes32 priceId = stockPriceIds[symbol];
             if (priceId == bytes32(0)) {
                 require(false, "StockOracle: price ID not set");
@@ -184,12 +164,10 @@ contract StockOracle is Ownable {
                 require(false, "StockOracle: invalid Pyth price");
             }
 
-            // Safe cast: Pyth prices are always positive for stocks / 安全转换：股票价格在 Pyth 中始终为正
             // forge-lint: disable-next-line(unsafe-typecast)
             rawPrice = uint256(uint64(pythPrice));
             timestamp = publishTime;
         } else {
-            // 从 Custom Relayer 获取价格 / Get price from Custom Relayer
             rawPrice = stockPrices[symbol];
             if (rawPrice == 0) {
                 require(false, "StockOracle: price not set");
@@ -197,38 +175,31 @@ contract StockOracle is Ownable {
             timestamp = lastUpdatedAt[symbol];
         }
 
-        // 归一化价格：从 8 位精度转换为 18 位精度 / Normalize price: convert from 8 decimals to 18 decimals
         normalizedPrice = DeFiMath.normalizeOraclePrice(rawPrice);
     }
 
     /**
      * @notice 检查价格是否过期 / Check if price is stale
-     * @param symbol 股票符号 / Stock symbol
-     * @return isStale 是否过期 / Whether price is stale
      */
     function isPriceStale(string memory symbol) public view returns (bool isStale) {
         uint256 lastUpdate = lastUpdatedAt[symbol];
-        if (lastUpdate == 0) return true; // 从未更新过 / Never updated
+        if (lastUpdate == 0) return true;
 
-        // 如果使用 Pyth，需要从 Pyth 获取时间戳 / If using Pyth, get timestamp from Pyth
         if (oracleStrategy == OracleStrategy.PYTH) {
             bytes32 priceId = stockPriceIds[symbol];
             if (priceId == bytes32(0)) return true;
 
+            // Only publishTime is needed; pythPrice return value is intentionally ignored here
+            // slither-disable-next-line unused-return
             (, uint256 publishTime) = pyth.getPrice(priceId);
             lastUpdate = publishTime;
         }
 
-        // 检查是否超过阈值 / Check if exceeds threshold
         isStale = (block.timestamp - lastUpdate) > stalePriceThreshold;
     }
 
     /**
      * @notice 获取价格并检查是否过期（带断路器检查）/ Get price with stale check (with circuit breaker)
-     * @param symbol 股票符号 / Stock symbol
-     * @return normalizedPrice 归一化后的价格（18位精度）/ Normalized price (18 decimals)
-     * @return timestamp 最后更新时间戳 / Last update timestamp
-     * @return isStale 是否过期 / Whether price is stale
      */
     function getPriceWithStaleCheck(string memory symbol)
         external
@@ -238,7 +209,6 @@ contract StockOracle is Ownable {
         (normalizedPrice, timestamp) = getPrice(symbol);
         isStale = isPriceStale(symbol);
 
-        // 如果启用断路器且价格过期，抛出错误 / If circuit breaker enabled and price stale, revert
         if (circuitBreakerEnabled && isStale) {
             revert PriceStale(symbol);
         }
@@ -246,11 +216,6 @@ contract StockOracle is Ownable {
 
     /**
      * @notice 获取价格信息（包含策略和状态）/ Get price info (including strategy and status)
-     * @param symbol 股票符号 / Stock symbol
-     * @return normalizedPrice 归一化后的价格（18位精度）/ Normalized price (18 decimals)
-     * @return timestamp 最后更新时间戳 / Last update timestamp
-     * @return isStale 是否过期 / Whether price is stale
-     * @return strategy 当前使用的策略 / Current strategy
      */
     function getPriceInfo(string memory symbol)
         external

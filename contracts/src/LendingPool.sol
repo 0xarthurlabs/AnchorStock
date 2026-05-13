@@ -87,6 +87,9 @@ contract LendingPool is Ownable, ReentrancyGuard {
         uint256 liquidationBonus
     );
 
+    /// @notice 事件：LTV 更新 / Event: LTV updated
+    event LTVUpdated(uint256 oldLtv, uint256 newLtv);
+
     // ============ 检查失败事件（埋点含相关参数）/ Check Failure Events (with relevant params) ============
     /// @notice 检查失败：无效地址 / Check failed: invalid address
     event CheckFailedInvalidAddress(string reason, address value);
@@ -116,32 +119,36 @@ contract LendingPool is Ownable, ReentrancyGuard {
 
     /**
      * @notice 构造函数 / Constructor
-     * @param _rwaToken RWA 代币地址 / RWA token address
-     * @param _usdToken USD 代币地址 / USD token address
-     * @param _oracle 价格预言机地址 / Price oracle address
-     * @param _stockSymbol 股票符号（如 "NVDA"）/ Stock symbol (e.g., "NVDA")
-     * @param _owner 合约所有者 / Contract owner
+     * @param rwaTokenAddr RWA 代币地址 / RWA token address
+     * @param usdTokenAddr USD 代币地址 / USD token address
+     * @param oracleAddr 价格预言机地址 / Price oracle address
+     * @param stockSymbolStr 股票符号（如 "NVDA"）/ Stock symbol (e.g., "NVDA")
+     * @param initialOwner 合约所有者 / Contract owner
      */
-    constructor(address _rwaToken, address _usdToken, address _oracle, string memory _stockSymbol, address _owner)
-        Ownable(_owner)
-    {
-        if (_rwaToken == address(0)) {
-            emit CheckFailedInvalidAddress("LendingPool: invalid RWA token", _rwaToken);
+    constructor(
+        address rwaTokenAddr,
+        address usdTokenAddr,
+        address oracleAddr,
+        string memory stockSymbolStr,
+        address initialOwner
+    ) Ownable(initialOwner) {
+        if (rwaTokenAddr == address(0)) {
+            emit CheckFailedInvalidAddress("LendingPool: invalid RWA token", rwaTokenAddr);
             require(false, "LendingPool: invalid RWA token");
         }
-        if (_usdToken == address(0)) {
-            emit CheckFailedInvalidAddress("LendingPool: invalid USD token", _usdToken);
+        if (usdTokenAddr == address(0)) {
+            emit CheckFailedInvalidAddress("LendingPool: invalid USD token", usdTokenAddr);
             require(false, "LendingPool: invalid USD token");
         }
-        if (_oracle == address(0)) {
-            emit CheckFailedInvalidAddress("LendingPool: invalid oracle", _oracle);
+        if (oracleAddr == address(0)) {
+            emit CheckFailedInvalidAddress("LendingPool: invalid oracle", oracleAddr);
             require(false, "LendingPool: invalid oracle");
         }
 
-        rwaToken = USStockRWA(_rwaToken);
-        usdToken = MockUSD(_usdToken);
-        oracle = StockOracle(_oracle);
-        stockSymbol = _stockSymbol;
+        rwaToken = USStockRWA(rwaTokenAddr);
+        usdToken = MockUSD(usdTokenAddr);
+        oracle = StockOracle(oracleAddr);
+        stockSymbol = stockSymbolStr;
 
         // 创建对应的 aToken，owner 设为当前 LendingPool，这样只有 LendingPool 能调用 mint/burn
         // Create aToken with owner = this LendingPool, so only LendingPool can call mint/burn
@@ -150,8 +157,8 @@ contract LendingPool is Ownable, ReentrancyGuard {
         string memory aTokenName = string(abi.encodePacked("Anchor ", rwaName));
         string memory aTokenSymbol = string(abi.encodePacked("a", rwaSymbol));
 
-        aToken aRWA = new aToken(aTokenName, aTokenSymbol, _rwaToken, address(this));
-        aTokens[_rwaToken] = address(aRWA);
+        aToken aRWA = new aToken(aTokenName, aTokenSymbol, rwaTokenAddr, address(this));
+        aTokens[rwaTokenAddr] = address(aRWA);
     }
 
     /**
@@ -399,9 +406,10 @@ contract LendingPool is Ownable, ReentrancyGuard {
         }
 
         // 获取 RWA 价格（已归一化到 18 位精度）/ Get RWA price (already normalized to 18 decimals)
+        // slither-disable-next-line unused-return
         (uint256 price,) = oracle.getPrice(stockSymbol);
 
-        // 计算抵押品价值：数量 * 价格（都是 18 位精度，需要除以 1e18）/ Calculate collateral value: amount * price (both 18 decimals, need to divide by 1e18)
+        // 计算抵押品价值 / Calculate collateral value
         totalValue = DeFiMath.mul(depositAmount, price);
     }
 
@@ -437,10 +445,6 @@ contract LendingPool is Ownable, ReentrancyGuard {
         pure
         returns (uint256 interest)
     {
-        // 线性利息公式：利息 = 本金 * 利率 * 时间 / 年秒数
-        // Linear interest formula: interest = principal * rate * time / seconds per year
-        // 所有值都是 18 位精度，所以需要除以 1e18 两次（一次是 rate，一次是结果）
-        // All values are 18 decimals, so need to divide by 1e18 twice (once for rate, once for result)
         uint256 secondsPerYear = 365 days;
         interest = DeFiMath.mul(principal, rate);
         interest = DeFiMath.mul(interest, timeElapsed);
@@ -463,8 +467,8 @@ contract LendingPool is Ownable, ReentrancyGuard {
             require(false, "LendingPool: insufficient deposit");
         }
 
-        // 计算提取后的抵押品价值 / Calculate collateral value after withdrawal
         uint256 newDeposit = currentDeposit - withdrawAmount;
+        // slither-disable-next-line unused-return
         (uint256 price,) = oracle.getPrice(stockSymbol);
         uint256 newCollateralValue = DeFiMath.mul(newDeposit, price);
 
@@ -481,58 +485,60 @@ contract LendingPool is Ownable, ReentrancyGuard {
 
     /**
      * @notice 设置存款利率 / Set deposit interest rate
-     * @param _rate 年化利率（18位精度）/ Annual interest rate (18 decimals)
+     * @param newRate 年化利率（18位精度）/ Annual interest rate (18 decimals)
      */
-    function setDepositRate(uint256 _rate) external onlyOwner {
-        if (_rate > 1e18) {
-            emit CheckFailedRateOutOfRange("depositRate", _rate, 1e18);
+    function setDepositRate(uint256 newRate) external onlyOwner {
+        if (newRate > 1e18) {
+            emit CheckFailedRateOutOfRange("depositRate", newRate, 1e18);
             require(false, "LendingPool: rate too high"); // 最大 100% / Max 100%
         }
-        depositRate = _rate;
+        depositRate = newRate;
     }
 
     /**
      * @notice 设置借款利率 / Set borrow interest rate
-     * @param _rate 年化利率（18位精度）/ Annual interest rate (18 decimals)
+     * @param newRate 年化利率（18位精度）/ Annual interest rate (18 decimals)
      */
-    function setBorrowRate(uint256 _rate) external onlyOwner {
-        if (_rate > 1e18) {
-            emit CheckFailedRateOutOfRange("borrowRate", _rate, 1e18);
+    function setBorrowRate(uint256 newRate) external onlyOwner {
+        if (newRate > 1e18) {
+            emit CheckFailedRateOutOfRange("borrowRate", newRate, 1e18);
             require(false, "LendingPool: rate too high"); // 最大 100% / Max 100%
         }
-        borrowRate = _rate;
+        borrowRate = newRate;
     }
 
     /**
      * @notice 设置 LTV / Set LTV
-     * @param _ltv 贷款价值比（18位精度）/ Loan-to-value ratio (18 decimals)
+     * @param newLtv 贷款价值比（18位精度）/ Loan-to-value ratio (18 decimals)
      */
-    function setLTV(uint256 _ltv) external onlyOwner {
-        require(_ltv <= 1e18, "LendingPool: LTV too high"); // 最大 100% / Max 100%
-        ltv = _ltv;
+    function setLTV(uint256 newLtv) external onlyOwner {
+        require(newLtv <= 1e18, "LendingPool: LTV too high"); // 最大 100% / Max 100%
+        uint256 oldLtv = ltv;
+        ltv = newLtv;
+        emit LTVUpdated(oldLtv, newLtv);
     }
 
     /**
      * @notice 设置清算阈值 / Set liquidation threshold
-     * @param _threshold 清算阈值（18位精度）/ Liquidation threshold (18 decimals)
+     * @param newThreshold 清算阈值（18位精度）/ Liquidation threshold (18 decimals)
      */
-    function setLiquidationThreshold(uint256 _threshold) external onlyOwner {
-        if (_threshold == 0) {
-            emit CheckFailedRateOutOfRange("liquidationThreshold", _threshold, 0);
+    function setLiquidationThreshold(uint256 newThreshold) external onlyOwner {
+        if (newThreshold == 0) {
+            emit CheckFailedRateOutOfRange("liquidationThreshold", newThreshold, 0);
             require(false, "LendingPool: threshold must be greater than 0");
         }
-        liquidationThreshold = _threshold;
+        liquidationThreshold = newThreshold;
     }
 
     /**
      * @notice 设置清算奖励率 / Set liquidation bonus rate
-     * @param _rate 新的清算奖励率（归一化到 18 位精度，建议 2%-5%）/ New liquidation bonus rate (normalized to 18 decimals, recommended 2%-5%)
+     * @param newRate 新的清算奖励率（归一化到 18 位精度，建议 2%-5%）/ New liquidation bonus rate (normalized to 18 decimals, recommended 2%-5%)
      */
-    function setLiquidationBonusRate(uint256 _rate) external onlyOwner {
-        if (_rate == 0 || _rate > 0.2 * 1e18) {
-            emit CheckFailedRateOutOfRange("liquidationBonusRate", _rate, 0.2 * 1e18);
+    function setLiquidationBonusRate(uint256 newRate) external onlyOwner {
+        if (newRate == 0 || newRate > 0.2 * 1e18) {
+            emit CheckFailedRateOutOfRange("liquidationBonusRate", newRate, 0.2 * 1e18);
             require(false, "LendingPool: invalid liquidation bonus rate"); // 最大 20% / Max 20%
         }
-        liquidationBonusRate = _rate;
+        liquidationBonusRate = newRate;
     }
 }
