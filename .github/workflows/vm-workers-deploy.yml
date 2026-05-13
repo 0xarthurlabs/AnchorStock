@@ -3,9 +3,11 @@
 #
 # VM requirements:
 #   - Docker engine + Compose (v2 plugin `docker compose` preferred; v1 binary `docker-compose` accepted)
-#   - VM service account / login authenticated to pull from Artifact Registry (gcloud auth configure-docker)
 #   - VM_REPO_DIR exists (any plain directory, NOT required to be a git clone); workflow scp's the
 #     compose file into ${VM_REPO_DIR}/docker/docker-compose.workers.yml on every run.
+#   - No long-lived GCP credentials needed on the VM: the runner mints a short-lived (~1h)
+#     Artifact Registry access token via WIF, passes it over SSH, and `docker login` / `logout`
+#     happens inside the deploy step.
 #
 # Contract addresses: read from contracts/deployments/<deploy_env>/<chain_id>.json (ORACLE, LENDING_POOL, PERP_ENGINE).
 # If missing or zero address, falls back to Environment variables WORKER_ORACLE_CONTRACT_ADDRESS,
@@ -183,6 +185,19 @@ jobs:
             'oracle-consumer:anchorstock-oracle-consumer' \
             'liquidation-bot:anchorstock-liquidation-bot')
 
+      - name: Mint short-lived Artifact Registry access token
+        id: regtoken
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOK="$(gcloud auth print-access-token)"
+          if [ -z "${TOK}" ]; then
+            echo "ERROR: gcloud auth print-access-token returned empty token." >&2
+            exit 1
+          fi
+          echo "::add-mask::${TOK}"
+          echo "token=${TOK}" >> "$GITHUB_OUTPUT"
+
       - name: Upload worker compose file to VM
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -198,6 +213,8 @@ jobs:
         env:
           TAG: ${{ github.sha }}
           PREFIX: ${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID }}/${{ vars.GAR_REPO }}
+          REGISTRY_HOST: ${{ vars.REGION }}-docker.pkg.dev
+          REGISTRY_TOKEN: ${{ steps.regtoken.outputs.token }}
           REPO_DIR: ${{ vars.VM_REPO_DIR }}
           KAFKA_BROKER: ${{ vars.WORKER_KAFKA_BROKER || 'localhost:9092' }}
           KAFKA_TOPIC_PRICE: ${{ vars.WORKER_KAFKA_TOPIC_PRICE || 'stock-prices' }}
@@ -223,7 +240,7 @@ jobs:
           username: ${{ secrets.VM_SSH_USER }}
           key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
           script_stop: true
-          envs: TAG,PREFIX,REPO_DIR,KAFKA_BROKER,KAFKA_TOPIC_PRICE,DB_HOST,DB_PORT,DB_USER,DB_PASSWORD,DB_NAME,REDIS_HOST,REDIS_PORT,REDIS_PASSWORD,RPC_URL,PRIVATE_KEY,ORACLE_CONTRACT_ADDRESS,LENDING_POOL_CONTRACT_ADDRESS,PERP_ENGINE_CONTRACT_ADDRESS,STOCK_API_URL,STOCK_API_KEY,STOCK_SYMBOLS,RELAYER_FETCH_INTERVAL
+          envs: TAG,PREFIX,REGISTRY_HOST,REGISTRY_TOKEN,REPO_DIR,KAFKA_BROKER,KAFKA_TOPIC_PRICE,DB_HOST,DB_PORT,DB_USER,DB_PASSWORD,DB_NAME,REDIS_HOST,REDIS_PORT,REDIS_PASSWORD,RPC_URL,PRIVATE_KEY,ORACLE_CONTRACT_ADDRESS,LENDING_POOL_CONTRACT_ADDRESS,PERP_ENGINE_CONTRACT_ADDRESS,STOCK_API_URL,STOCK_API_KEY,STOCK_SYMBOLS,RELAYER_FETCH_INTERVAL
           script: |
             set -euo pipefail
             cd "${REPO_DIR}"
@@ -257,6 +274,15 @@ jobs:
             } > docker/.env.workers
             export WORKER_IMAGE_PREFIX="${PREFIX}"
             export WORKER_IMAGE_TAG="${TAG}"
+            # Log in to Artifact Registry using the short-lived token minted by the runner.
+            # This avoids storing any long-lived GCP credentials on the VM.
+            if [ -z "${REGISTRY_TOKEN:-}" ] || [ -z "${REGISTRY_HOST:-}" ]; then
+              echo "ERROR: REGISTRY_TOKEN / REGISTRY_HOST not provided to SSH step." >&2
+              exit 1
+            fi
+            trap 'docker logout "${REGISTRY_HOST}" >/dev/null 2>&1 || true' EXIT
+            printf '%s' "${REGISTRY_TOKEN}" \
+              | docker login -u oauth2accesstoken --password-stdin "https://${REGISTRY_HOST}" >/dev/null
             # Pick Compose CLI: prefer v2 plugin ("docker compose"), fall back to v1 binary ("docker-compose").
             if docker compose version >/dev/null 2>&1; then
               DC=(docker compose)
