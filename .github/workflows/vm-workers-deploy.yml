@@ -213,6 +213,30 @@ jobs:
             set -euo pipefail
             cd "${REPO_DIR}"
             umask 077
+            # Sync VM working tree to the exact commit being deployed so the
+            # checked-in compose file / Dockerfiles match the pushed images.
+            if [ ! -d .git ]; then
+              echo "ERROR: ${REPO_DIR} is not a git checkout (no .git). Set VM_REPO_DIR to a clone of the repo." >&2
+              exit 1
+            fi
+            if ! git fetch --quiet --tags origin; then
+              echo "ERROR: 'git fetch origin' failed on VM. Check origin remote and VM auth (deploy key / PAT) for the repo." >&2
+              exit 1
+            fi
+            if ! git cat-file -e "${TAG}^{commit}" 2>/dev/null; then
+              echo "ERROR: commit ${TAG} not reachable from VM clone after fetch." >&2
+              echo "Make sure the commit is pushed and the VM has read access to the remote." >&2
+              exit 1
+            fi
+            # Force-detach to the exact deploy commit, wiping any local edits in the VM clone.
+            git checkout --quiet --force --detach "${TAG}"
+            # Drop untracked files under docker/ (gitignored files like docker/.env.workers are preserved).
+            git clean -fd -- docker/
+            if [ ! -f docker/docker-compose.workers.yml ]; then
+              echo "ERROR: docker/docker-compose.workers.yml not present at commit ${TAG}." >&2
+              echo "Commit the file to the repo and re-run the workflow." >&2
+              exit 1
+            fi
             mkdir -p docker
             {
               printf '%s\n' "KAFKA_BROKER=${KAFKA_BROKER}"
