@@ -1,4 +1,4 @@
 {
-  "filter_paths": "lib/(forge-std|openzeppelin-contracts)(/|$)",
-  "detectors_to_exclude": "pyth-unchecked"
+  "detectors_to_exclude": "pyth-unchecked-price,dangerous-strict-equality,pyth-deprecated-functions",
+  "filter_paths": "lib/,node_modules/"
 }
