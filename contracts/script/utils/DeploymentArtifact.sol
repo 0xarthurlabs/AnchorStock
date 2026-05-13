@@ -63,19 +63,18 @@ library DeploymentArtifact {
         });
     }
 
-    function _serializeSummary(Vm vm_, string memory root, DeploymentSummary memory s) private returns (string memory) {
-        string memory o = root;
-        o = vm_.serializeString(o, "env", s.env);
-        o = vm_.serializeUint(o, "chainId", s.chainId);
-        o = vm_.serializeString(o, "gitCommit", s.gitCommit);
-        o = vm_.serializeUint(o, "deployedAt", s.deployedAt);
+    /// @dev 同一 JSON 对象的所有 serialize* 必须使用固定 objectKey；不能把上一行返回值当作 objectKey。
+    function _serializeSummary(Vm vm_, string memory rootKey, DeploymentSummary memory s) private {
+        vm_.serializeString(rootKey, "env", s.env);
+        vm_.serializeUint(rootKey, "chainId", s.chainId);
+        vm_.serializeString(rootKey, "gitCommit", s.gitCommit);
+        vm_.serializeUint(rootKey, "deployedAt", s.deployedAt);
 
-        string memory c = "compiler";
-        c = vm_.serializeString(c, "solcVersion", s.compiler.solcVersion);
-        c = vm_.serializeBool(c, "optimizerEnabled", s.compiler.optimizerEnabled);
-        c = vm_.serializeUint(c, "optimizerRuns", s.compiler.optimizerRuns);
-
-        return vm_.serializeString(o, "compiler", c);
+        string memory compilerKey = "summaryCompiler";
+        vm_.serializeString(compilerKey, "solcVersion", s.compiler.solcVersion);
+        vm_.serializeBool(compilerKey, "optimizerEnabled", s.compiler.optimizerEnabled);
+        string memory compilerJson = vm_.serializeUint(compilerKey, "optimizerRuns", s.compiler.optimizerRuns);
+        vm_.serializeString(rootKey, "compiler", compilerJson);
     }
 
     function write(
@@ -91,27 +90,27 @@ library DeploymentArtifact {
 
         DeploymentSummary memory s = summary(vm_, deployEnv);
 
-        string memory root = "root";
-        root = _serializeSummary(vm_, root, s);
+        string memory rootKey = "root";
+        _serializeSummary(vm_, rootKey, s);
 
         // contracts: { name: { address, bytecodeHash, explorer? } }
-        string memory contractsObj = "contracts";
+        string memory contractsKey = "contractsAccum";
+        string memory contractsJson;
         for (uint256 i = 0; i < contractNames.length; i++) {
-            string memory item = string.concat("c_", contractNames[i]);
+            string memory itemKey = string.concat("c_", contractNames[i]);
             bytes32 codeHash = contractAddrs[i].codehash;
 
-            item = vm_.serializeAddress(item, "address", contractAddrs[i]);
-            item = vm_.serializeBytes32(item, "bytecodeHash", codeHash);
+            vm_.serializeAddress(itemKey, "address", contractAddrs[i]);
+            contractsJson = vm_.serializeBytes32(itemKey, "bytecodeHash", codeHash);
             if (bytes(explorerLinks[i]).length > 0) {
-                item = vm_.serializeString(item, "explorer", explorerLinks[i]);
+                contractsJson = vm_.serializeString(itemKey, "explorer", explorerLinks[i]);
             }
 
-            contractsObj = vm_.serializeString(contractsObj, contractNames[i], item);
+            contractsJson = vm_.serializeString(contractsKey, contractNames[i], contractsJson);
         }
 
-        root = vm_.serializeString(root, "contracts", contractsObj);
-
-        vm_.writeJson(root, outPath);
+        string memory out = vm_.serializeString(rootKey, "contracts", contractsJson);
+        vm_.writeJson(out, outPath);
     }
 
     function writeWithParams(
@@ -128,50 +127,50 @@ library DeploymentArtifact {
 
         DeploymentSummary memory s = summary(vm_, deployEnv);
 
-        string memory root = "root";
-        root = _serializeSummary(vm_, root, s);
+        string memory rootKey = "root";
+        _serializeSummary(vm_, rootKey, s);
 
-        string memory contractsObj = "contracts";
+        string memory contractsKey = "contractsAccum";
+        string memory contractsJson;
         for (uint256 i = 0; i < contractNames.length; i++) {
-            string memory item = string.concat("c_", contractNames[i]);
+            string memory itemKey = string.concat("c_", contractNames[i]);
             bytes32 codeHash = contractAddrs[i].codehash;
 
-            item = vm_.serializeAddress(item, "address", contractAddrs[i]);
-            item = vm_.serializeBytes32(item, "bytecodeHash", codeHash);
+            vm_.serializeAddress(itemKey, "address", contractAddrs[i]);
+            contractsJson = vm_.serializeBytes32(itemKey, "bytecodeHash", codeHash);
             if (bytes(explorerLinks[i]).length > 0) {
-                item = vm_.serializeString(item, "explorer", explorerLinks[i]);
+                contractsJson = vm_.serializeString(itemKey, "explorer", explorerLinks[i]);
             }
-            contractsObj = vm_.serializeString(contractsObj, contractNames[i], item);
+            contractsJson = vm_.serializeString(contractsKey, contractNames[i], contractsJson);
         }
-        root = vm_.serializeString(root, "contracts", contractsObj);
+        vm_.serializeString(rootKey, "contracts", contractsJson);
 
         // params snapshot
-        string memory params = "params";
-        string memory oracle = "oracle";
-        oracle = vm_.serializeUint(oracle, "stalePriceThreshold", p.oracleStalePriceThreshold);
-        oracle = vm_.serializeBool(oracle, "circuitBreakerEnabled", p.oracleCircuitBreakerEnabled);
-        oracle = vm_.serializeUint(oracle, "oracleStrategy", p.oracleStrategy);
-        params = vm_.serializeString(params, "oracle", oracle);
+        string memory paramsKey = "paramsRoot";
+        string memory oracleKey = "paramsOracle";
+        vm_.serializeUint(oracleKey, "stalePriceThreshold", p.oracleStalePriceThreshold);
+        vm_.serializeBool(oracleKey, "circuitBreakerEnabled", p.oracleCircuitBreakerEnabled);
+        string memory oracleJson = vm_.serializeUint(oracleKey, "oracleStrategy", p.oracleStrategy);
+        vm_.serializeString(paramsKey, "oracle", oracleJson);
 
-        string memory pool = "lendingPool";
-        pool = vm_.serializeUint(pool, "depositRate", p.poolDepositRate);
-        pool = vm_.serializeUint(pool, "borrowRate", p.poolBorrowRate);
-        pool = vm_.serializeUint(pool, "ltv", p.poolLtv);
-        pool = vm_.serializeUint(pool, "liquidationThreshold", p.poolLiquidationThreshold);
-        pool = vm_.serializeUint(pool, "liquidationBonusRate", p.poolLiquidationBonusRate);
-        params = vm_.serializeString(params, "lendingPool", pool);
+        string memory poolKey = "paramsPool";
+        vm_.serializeUint(poolKey, "depositRate", p.poolDepositRate);
+        vm_.serializeUint(poolKey, "borrowRate", p.poolBorrowRate);
+        vm_.serializeUint(poolKey, "ltv", p.poolLtv);
+        vm_.serializeUint(poolKey, "liquidationThreshold", p.poolLiquidationThreshold);
+        string memory poolJson = vm_.serializeUint(poolKey, "liquidationBonusRate", p.poolLiquidationBonusRate);
+        vm_.serializeString(paramsKey, "lendingPool", poolJson);
 
-        string memory perp = "perp";
-        perp = vm_.serializeUint(perp, "initialMarginRate", p.perpInitialMarginRate);
-        perp = vm_.serializeUint(perp, "maintenanceMarginRate", p.perpMaintenanceMarginRate);
-        perp = vm_.serializeUint(perp, "fundingRate", p.perpFundingRate);
-        perp = vm_.serializeUint(perp, "fundingInterval", p.perpFundingInterval);
-        perp = vm_.serializeUint(perp, "liquidationBonusRate", p.perpLiquidationBonusRate);
-        params = vm_.serializeString(params, "perp", perp);
+        string memory perpKey = "paramsPerp";
+        vm_.serializeUint(perpKey, "initialMarginRate", p.perpInitialMarginRate);
+        vm_.serializeUint(perpKey, "maintenanceMarginRate", p.perpMaintenanceMarginRate);
+        vm_.serializeUint(perpKey, "fundingRate", p.perpFundingRate);
+        vm_.serializeUint(perpKey, "fundingInterval", p.perpFundingInterval);
+        string memory perpJson = vm_.serializeUint(perpKey, "liquidationBonusRate", p.perpLiquidationBonusRate);
+        string memory paramsJson = vm_.serializeString(paramsKey, "perp", perpJson);
 
-        root = vm_.serializeString(root, "params", params);
-
-        vm_.writeJson(root, outPath);
+        string memory out = vm_.serializeString(rootKey, "params", paramsJson);
+        vm_.writeJson(out, outPath);
     }
 }
 

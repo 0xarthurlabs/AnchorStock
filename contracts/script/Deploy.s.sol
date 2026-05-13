@@ -158,16 +158,17 @@ contract DeployScript is Script {
             string memory dir = string.concat("deployments/", deployEnv);
             vm.createDir(dir, true);
             string memory out = string.concat(dir, "/", vm.toString(block.chainid), ".json");
-            string memory root = "artifact";
-            root = vm.serializeString(root, "env", deployEnv);
-            root = vm.serializeUint(root, "chainId", block.chainid);
-            root = vm.serializeAddress(root, "ORACLE", oracle);
-            root = vm.serializeAddress(root, "LENDING_POOL", lendingPool);
-            root = vm.serializeAddress(root, "PERP_ENGINE", perpEngine);
-            root = vm.serializeAddress(root, "RWA_TOKEN", rwaToken);
-            root = vm.serializeAddress(root, "USD_TOKEN", usdToken);
-            root = vm.serializeAddress(root, "A_TOKEN", aToken);
-            vm.writeJson(root, out);
+            // 所有 serialize* 必须使用同一个 objectKey；不能把上一行返回值当作 objectKey，否则 writeJson 只剩最后一个字段。
+            string memory obj = "deployArtifact";
+            vm.serializeString(obj, "env", deployEnv);
+            vm.serializeUint(obj, "chainId", block.chainid);
+            vm.serializeAddress(obj, "ORACLE", oracle);
+            vm.serializeAddress(obj, "LENDING_POOL", lendingPool);
+            vm.serializeAddress(obj, "PERP_ENGINE", perpEngine);
+            vm.serializeAddress(obj, "RWA_TOKEN", rwaToken);
+            vm.serializeAddress(obj, "USD_TOKEN", usdToken);
+            string memory json = vm.serializeAddress(obj, "A_TOKEN", aToken);
+            vm.writeJson(json, out);
             console.log("Deployment artifact:", out);
         }
 

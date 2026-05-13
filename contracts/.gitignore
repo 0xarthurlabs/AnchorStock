@@ -6,6 +6,7 @@
 out/
 cache/
 broadcast/
+deployments/
 
 # IDE
 .idea/
