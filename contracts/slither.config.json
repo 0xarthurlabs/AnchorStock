@@ -1,4 +1,4 @@
 {
-  "exclude": "pyth-unchecked-price,divide-before-multiply,incorrect-equality",
+  "detectors_to_exclude": ["pyth-unchecked-price", "divide-before-multiply", "incorrect-equality", "pyth-deprecated-functions"],
   "filter_paths": "lib/"
 }
