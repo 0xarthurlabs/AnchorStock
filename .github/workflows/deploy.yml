@@ -79,6 +79,11 @@ on:
         required: false
         type: string
         default: ""
+      extra_env_vars:
+        description: "Extra comma-separated KEY=value for gcloud --set-env-vars (e.g. contract addresses). Merged with DB_* when both set."
+        required: false
+        type: string
+        default: ""
     outputs:
       service_url:
         description: Deployed HTTPS URL for the Cloud Run service
@@ -159,6 +164,10 @@ on:
         description: GitHub Environment name (enables per-env secrets; empty = no environment)
         required: false
         default: ""
+      extra_env_vars:
+        description: "Extra comma-separated KEY=value for gcloud --set-env-vars (merged with DB_* when set)"
+        required: false
+        default: ""
 
 concurrency:
   group: deploy-${{ inputs.project_id }}-${{ inputs.region }}-${{ inputs.service }}
@@ -194,6 +203,7 @@ jobs:
       DEPLOY_DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
       VPC_CONNECTOR: ${{ inputs.vpc_connector }}
       VPC_EGRESS: ${{ inputs.vpc_egress }}
+      EXTRA_ENV_VARS: ${{ inputs.extra_env_vars }}
     steps:
       - name: Checkout
         if: ${{ inputs.promote_image_ref == '' }}
@@ -264,6 +274,7 @@ jobs:
                --region  "${REGION}"
                --image   "${IMG}")
 
+          envlist=""
           if [ -n "${DEPLOY_DB_HOST:-}" ]; then
             envlist="DB_HOST=${DEPLOY_DB_HOST}"
             envlist="${envlist},DB_PORT=${DEPLOY_DB_PORT:-5432}"
@@ -272,8 +283,18 @@ jobs:
             if [ -n "${DEPLOY_DB_PASSWORD:-}" ]; then
               envlist="${envlist},DB_PASSWORD=${DEPLOY_DB_PASSWORD}"
             fi
+            echo "DB env vars will be set (DB_HOST=${DEPLOY_DB_HOST})"
+          fi
+          if [ -n "${EXTRA_ENV_VARS:-}" ]; then
+            if [ -n "${envlist}" ]; then
+              envlist="${envlist},${EXTRA_ENV_VARS}"
+            else
+              envlist="${EXTRA_ENV_VARS}"
+            fi
+            echo "Extra env vars merged into --set-env-vars (length=${#envlist})"
+          fi
+          if [ -n "${envlist}" ]; then
             CMD+=(--set-env-vars "${envlist}")
-            echo "DB env vars injected (DB_HOST=${DEPLOY_DB_HOST})"
           fi
 
           if [ -n "${VPC_CONNECTOR:-}" ]; then
@@ -338,4 +359,5 @@ jobs:
             echo "- db_password: *(masked)*"
             echo "- vpc_connector: ${VPC_CONNECTOR:-(not set)}"
             echo "- vpc_egress: ${VPC_EGRESS:-(not set)}"
+            echo "- extra_env_vars: *(keys only — values omitted in summary)*"
           } >> "$GITHUB_STEP_SUMMARY"

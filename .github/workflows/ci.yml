@@ -5,6 +5,9 @@ on:
     branches: [main]
   push:
     branches: [main]
+    paths-ignore:
+      # Deployment JSON is written by contracts-testnet-deploy.yml; avoid re-running full CI on that push.
+      - "contracts/deployments/**"
 
 concurrency:
   group: ci-${{ github.ref }}

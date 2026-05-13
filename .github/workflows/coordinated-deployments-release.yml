@@ -1,0 +1,199 @@
+# After contracts produce `contracts/deployments/<env>/<chainId>.json`, syncs into `frontend/public/deployments/...`,
+# computes sha256 + API extra env (jq), then deploys api-server + frontend.
+#
+# Prerequisite: the deployment JSON must exist on the branch this workflow runs (e.g. commit the file from the
+# "Contracts (testnet deploy)" workflow artifact, or extend that workflow to push the JSON to the repo).
+name: Coordinated (deployments sync + API + frontend)
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Must match deployments folder name (staging|prod)
+        required: true
+        type: choice
+        options:
+          - staging
+          - prod
+      chain_id:
+        description: Chain ID (e.g. 1328)
+        required: true
+        type: string
+      deploy_api:
+        description: Deploy api-server via reusable deploy workflow
+        required: true
+        type: boolean
+        default: true
+      deploy_frontend:
+        description: Deploy frontend via reusable deploy-frontend workflow
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: coordinated-deployments-${{ inputs.env }}-${{ inputs.chain_id }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: prepare
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    outputs:
+      project_id: ${{ steps.map.outputs.project_id }}
+      region: ${{ steps.map.outputs.region }}
+      service: ${{ steps.map.outputs.service }}
+      gar_repo: ${{ steps.map.outputs.gar_repo }}
+      image_name: ${{ steps.map.outputs.image_name }}
+      db_host: ${{ steps.map.outputs.db_host }}
+      db_port: ${{ steps.map.outputs.db_port }}
+      db_user: ${{ steps.map.outputs.db_user }}
+      db_name: ${{ steps.map.outputs.db_name }}
+      vpc_connector: ${{ steps.map.outputs.vpc_connector }}
+      vpc_egress: ${{ steps.map.outputs.vpc_egress }}
+      extra_env_vars: ${{ steps.contracts.outputs.extra_env_vars }}
+      deployments_sha256: ${{ steps.contracts.outputs.deployments_sha256 }}
+      frontend_service: ${{ steps.map.outputs.frontend_service }}
+      frontend_image_name: ${{ steps.map.outputs.frontend_image_name }}
+      next_public_rpc_url: ${{ steps.map.outputs.next_public_rpc_url }}
+      next_public_rpc_origin_allowlist: ${{ steps.map.outputs.next_public_rpc_origin_allowlist }}
+      next_public_backend_api_url: ${{ steps.map.outputs.next_public_backend_api_url }}
+      next_public_wallet_connect_project_id: ${{ steps.map.outputs.next_public_wallet_connect_project_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Export environment-scoped variables
+        id: map
+        env:
+          DEPLOY_FRONTEND: ${{ inputs.deploy_frontend }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "project_id=${{ vars.PROJECT_ID }}" >> "$GITHUB_OUTPUT"
+          echo "region=${{ vars.REGION }}" >> "$GITHUB_OUTPUT"
+          echo "service=${{ vars.SERVICE }}" >> "$GITHUB_OUTPUT"
+          echo "gar_repo=${{ vars.GAR_REPO }}" >> "$GITHUB_OUTPUT"
+          echo "image_name=${{ vars.IMAGE_NAME || 'anchorstock-api' }}" >> "$GITHUB_OUTPUT"
+          echo "db_host=${{ vars.DB_HOST }}" >> "$GITHUB_OUTPUT"
+          echo "db_port=${{ vars.DB_PORT || '5432' }}" >> "$GITHUB_OUTPUT"
+          echo "db_user=${{ vars.DB_USER || 'anchorstock' }}" >> "$GITHUB_OUTPUT"
+          echo "db_name=${{ vars.DB_NAME || 'anchorstock' }}" >> "$GITHUB_OUTPUT"
+          echo "vpc_connector=${{ vars.VPC_CONNECTOR }}" >> "$GITHUB_OUTPUT"
+          echo "vpc_egress=${{ vars.VPC_EGRESS || 'all-traffic' }}" >> "$GITHUB_OUTPUT"
+          echo "frontend_service=${{ vars.FRONTEND_SERVICE }}" >> "$GITHUB_OUTPUT"
+          echo "frontend_image_name=${{ vars.FRONTEND_IMAGE_NAME || 'anchorstock-frontend' }}" >> "$GITHUB_OUTPUT"
+          echo "next_public_rpc_url=${{ vars.NEXT_PUBLIC_RPC_URL }}" >> "$GITHUB_OUTPUT"
+          echo "next_public_rpc_origin_allowlist=${{ vars.NEXT_PUBLIC_RPC_ORIGIN_ALLOWLIST }}" >> "$GITHUB_OUTPUT"
+          echo "next_public_backend_api_url=${{ vars.NEXT_PUBLIC_BACKEND_API_URL }}" >> "$GITHUB_OUTPUT"
+          echo "next_public_wallet_connect_project_id=${{ vars.NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID }}" >> "$GITHUB_OUTPUT"
+          for k in project_id region service gar_repo; do
+            v="$(grep -E "^${k}=" "$GITHUB_OUTPUT" | cut -d= -f2- || true)"
+            if [ -z "$v" ]; then
+              echo "ERROR: missing Environment variable output: $k" >&2
+              exit 1
+            fi
+          done
+          if [ "${DEPLOY_FRONTEND}" = "true" ]; then
+            for k in frontend_service next_public_rpc_url next_public_rpc_origin_allowlist next_public_backend_api_url; do
+              v="$(grep -E "^${k}=" "$GITHUB_OUTPUT" | cut -d= -f2- || true)"
+              if [ -z "$v" ]; then
+                echo "ERROR: missing Environment variable output: $k (required when deploy_frontend=true)" >&2
+                exit 1
+              fi
+            done
+          fi
+
+      - name: Sync deployments JSON + jq for API env
+        id: contracts
+        shell: bash
+        env:
+          DEP_ENV: ${{ inputs.env }}
+          CHAIN_ID: ${{ inputs.chain_id }}
+        run: |
+          set -euo pipefail
+          ART="contracts/deployments/${DEP_ENV}/${CHAIN_ID}.json"
+          if [ ! -f "${ART}" ]; then
+            echo "ERROR: missing ${ART}. Run contract deploy for this env/chain first." >&2
+            exit 1
+          fi
+          mkdir -p "frontend/public/deployments/${DEP_ENV}"
+          cp "${ART}" "frontend/public/deployments/${DEP_ENV}/${CHAIN_ID}.json"
+          sha="$(sha256sum "frontend/public/deployments/${DEP_ENV}/${CHAIN_ID}.json" | awk '{print $1}')"
+          echo "deployments_sha256=${sha}" >> "$GITHUB_OUTPUT"
+          ZERO="0x0000000000000000000000000000000000000000"
+          EXTRA=""
+          append() {
+            local key="$1" val="$2"
+            [ -z "${val}" ] && return
+            [ "${val}" = "${ZERO}" ] && return
+            [ -n "${EXTRA}" ] && EXTRA+=","
+            EXTRA+="${key}=${val}"
+          }
+          append ORACLE_CONTRACT_ADDRESS "$(jq -r '.ORACLE // empty' "${ART}")"
+          append LENDING_POOL_CONTRACT_ADDRESS "$(jq -r '.LENDING_POOL // empty' "${ART}")"
+          append PERP_ENGINE_CONTRACT_ADDRESS "$(jq -r '.PERP_ENGINE // empty' "${ART}")"
+          {
+            echo "extra_env_vars<<DELIM"
+            if [ -n "${EXTRA}" ]; then echo -n "${EXTRA}"; fi
+            echo
+            echo "DELIM"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload deployments overlay for frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployments-overlay
+          path: frontend/public/deployments
+
+  deploy_api:
+    name: deploy-api
+    needs: [prepare]
+    if: ${{ inputs.deploy_api }}
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit
+    with:
+      project_id: ${{ needs.prepare.outputs.project_id }}
+      region: ${{ needs.prepare.outputs.region }}
+      service: ${{ needs.prepare.outputs.service }}
+      gar_repo: ${{ needs.prepare.outputs.gar_repo }}
+      image_name: ${{ needs.prepare.outputs.image_name }}
+      dockerfile: docker/cloudrun/api-server.Dockerfile
+      context: .
+      smoke_path: /health
+      db_host: ${{ needs.prepare.outputs.db_host }}
+      db_port: ${{ needs.prepare.outputs.db_port }}
+      db_user: ${{ needs.prepare.outputs.db_user }}
+      db_name: ${{ needs.prepare.outputs.db_name }}
+      vpc_connector: ${{ needs.prepare.outputs.vpc_connector }}
+      vpc_egress: ${{ needs.prepare.outputs.vpc_egress }}
+      env_name: ${{ inputs.env }}
+      extra_env_vars: ${{ needs.prepare.outputs.extra_env_vars }}
+
+  deploy_frontend:
+    name: deploy-frontend
+    needs: [prepare]
+    if: ${{ inputs.deploy_frontend }}
+    uses: ./.github/workflows/deploy-frontend.yml
+    secrets: inherit
+    with:
+      project_id: ${{ needs.prepare.outputs.project_id }}
+      region: ${{ needs.prepare.outputs.region }}
+      service: ${{ needs.prepare.outputs.frontend_service }}
+      gar_repo: ${{ needs.prepare.outputs.gar_repo }}
+      image_name: ${{ needs.prepare.outputs.frontend_image_name }}
+      vpc_connector: ${{ needs.prepare.outputs.vpc_connector }}
+      vpc_egress: ${{ needs.prepare.outputs.vpc_egress }}
+      env_name: ${{ inputs.env }}
+      deployments_artifact_name: deployments-overlay
+      next_public_app_env: ${{ inputs.env }}
+      next_public_chain_id: ${{ inputs.chain_id }}
+      next_public_rpc_url: ${{ needs.prepare.outputs.next_public_rpc_url }}
+      next_public_rpc_origin_allowlist: ${{ needs.prepare.outputs.next_public_rpc_origin_allowlist }}
+      next_public_backend_api_url: ${{ needs.prepare.outputs.next_public_backend_api_url }}
+      next_public_wallet_connect_project_id: ${{ needs.prepare.outputs.next_public_wallet_connect_project_id }}
+      next_public_deployments_sha256: ${{ needs.prepare.outputs.deployments_sha256 }}

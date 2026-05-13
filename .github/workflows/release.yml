@@ -82,11 +82,12 @@ jobs:
       vpc_connector: ${{ needs.resolve.outputs.vpc_connector }}
       vpc_egress: ${{ needs.resolve.outputs.vpc_egress }}
       env_name: ${{ inputs.env }}
+      extra_env_vars: ""
     secrets:
       GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
       GCP_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
 
-  # Staging-only extended smoke (4.6 单入口编排的一部分): extra paths from repo variable CLOUDRUN_STAGING_SMOKE_PATHS (comma-separated).
+  # Staging-only extended smoke: extra paths from Environment variable SMOKE_PATHS (comma-separated).
   staging-extended-smoke:
     name: staging-extended-smoke
     needs: [deploy]
@@ -104,7 +105,7 @@ jobs:
             echo "ERROR: deploy did not expose service_url" >&2
             exit 1
           fi
-          PATHS="${EXTRA_PATHS:-/metrics}"
+          PATHS="${EXTRA_PATHS:-/health}"
           IFS=',' read -r -a ARR <<< "${PATHS}"
           for raw in "${ARR[@]}"; do
             p="$(echo "${raw}" | xargs)"

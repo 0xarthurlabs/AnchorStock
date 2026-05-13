@@ -1,0 +1,51 @@
+# Execute an existing Cloud Run Job (backfill) with symbol/interval args.
+name: Backfill job execute
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        required: true
+        type: choice
+        options:
+          - staging
+          - prod
+      symbol:
+        required: true
+        default: NVDA
+      interval:
+        description: e.g. 5min, 1min, daily
+        required: true
+        default: 5min
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    env:
+      PROJECT_ID: ${{ vars.PROJECT_ID }}
+      REGION: ${{ vars.REGION }}
+      JOB_NAME: ${{ vars.BACKFILL_JOB_NAME }}
+    steps:
+      - name: Auth to Google Cloud (Workload Identity)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Execute job
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${JOB_NAME}" \
+            --project "${PROJECT_ID}" \
+            --region "${REGION}" \
+            --wait \
+            --args="--symbol=${{ inputs.symbol }},--interval=${{ inputs.interval }}" \
+            --quiet

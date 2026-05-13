@@ -1,0 +1,225 @@
+name: Deploy frontend (Cloud Run)
+
+on:
+  workflow_call:
+    inputs:
+      project_id:
+        required: true
+        type: string
+      region:
+        required: true
+        type: string
+      service:
+        required: true
+        type: string
+      gar_repo:
+        required: true
+        type: string
+      image_name:
+        required: true
+        type: string
+        default: anchorstock-frontend
+      promote_image_ref:
+        required: false
+        type: string
+        default: ""
+      vpc_connector:
+        required: false
+        type: string
+        default: ""
+      vpc_egress:
+        required: false
+        type: string
+        default: "all-traffic"
+      env_name:
+        required: false
+        type: string
+        default: ""
+      next_public_app_env:
+        required: true
+        type: string
+      next_public_chain_id:
+        required: true
+        type: string
+      next_public_rpc_url:
+        required: true
+        type: string
+      next_public_rpc_origin_allowlist:
+        required: true
+        type: string
+      next_public_backend_api_url:
+        required: true
+        type: string
+      next_public_wallet_connect_project_id:
+        required: false
+        type: string
+        default: ""
+      next_public_deployments_sha256:
+        required: false
+        type: string
+        default: ""
+      deployments_artifact_name:
+        description: Artifact from prior job containing frontend/public/deployments tree
+        required: false
+        type: string
+        default: ""
+    outputs:
+      service_url:
+        value: ${{ jobs.build-push-deploy-smoke.outputs.service_url }}
+      image_ref:
+        value: ${{ jobs.build-push-deploy-smoke.outputs.image_ref }}
+      revision_name:
+        value: ${{ jobs.build-push-deploy-smoke.outputs.revision_name }}
+    secrets:
+      GCP_WORKLOAD_IDENTITY_PROVIDER:
+        required: true
+      GCP_SERVICE_ACCOUNT_EMAIL:
+        required: true
+
+concurrency:
+  group: deploy-frontend-${{ inputs.project_id }}-${{ inputs.region }}-${{ inputs.service }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-push-deploy-smoke:
+    name: build-push-deploy-smoke
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env_name || '' }}
+    outputs:
+      service_url: ${{ steps.url.outputs.service_url }}
+      image_ref: ${{ steps.imgref.outputs.image_ref }}
+      revision_name: ${{ steps.rev.outputs.revision_name }}
+    env:
+      PROJECT_ID: ${{ inputs.project_id }}
+      REGION: ${{ inputs.region }}
+      SERVICE: ${{ inputs.service }}
+      GAR_REPO: ${{ inputs.gar_repo }}
+      IMAGE_NAME: ${{ inputs.image_name }}
+      PROMOTE_IMAGE_REF: ${{ inputs.promote_image_ref }}
+      VPC_CONNECTOR: ${{ inputs.vpc_connector }}
+      VPC_EGRESS: ${{ inputs.vpc_egress }}
+    steps:
+      - name: Checkout
+        if: ${{ inputs.promote_image_ref == '' }}
+        uses: actions/checkout@v4
+
+      - name: Restore deployments overlay (coordinated release)
+        if: ${{ inputs.promote_image_ref == '' && inputs.deployments_artifact_name != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.deployments_artifact_name }}
+          path: frontend/public/deployments
+
+      - name: Auth to Google Cloud (Workload Identity)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        if: ${{ inputs.promote_image_ref == '' }}
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Compute tag URI (build path)
+        if: ${{ inputs.promote_image_ref == '' }}
+        id: tag
+        run: |
+          set -euo pipefail
+          IMAGE_TAG_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPO}/${IMAGE_NAME}:${GITHUB_SHA}"
+          echo "IMAGE_TAG_URI=${IMAGE_TAG_URI}" >> "$GITHUB_OUTPUT"
+          echo "Will build/push: ${IMAGE_TAG_URI}"
+
+      - name: Build and push image
+        if: ${{ inputs.promote_image_ref == '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./docker/cloudrun/frontend.Dockerfile
+          push: true
+          tags: ${{ steps.tag.outputs.IMAGE_TAG_URI }}
+          build-args: |
+            NEXT_PUBLIC_APP_ENV=${{ inputs.next_public_app_env }}
+            NEXT_PUBLIC_CHAIN_ID=${{ inputs.next_public_chain_id }}
+            NEXT_PUBLIC_RPC_URL=${{ inputs.next_public_rpc_url }}
+            NEXT_PUBLIC_RPC_ORIGIN_ALLOWLIST=${{ inputs.next_public_rpc_origin_allowlist }}
+            NEXT_PUBLIC_BACKEND_API_URL=${{ inputs.next_public_backend_api_url }}
+            NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=${{ inputs.next_public_wallet_connect_project_id }}
+            NEXT_PUBLIC_DEPLOYMENTS_SHA256=${{ inputs.next_public_deployments_sha256 }}
+
+      - name: Resolve immutable image reference (@digest)
+        id: imgref
+        run: |
+          set -euo pipefail
+          if [ -n "${PROMOTE_IMAGE_REF}" ]; then
+            echo "image_ref=${PROMOTE_IMAGE_REF}" >> "$GITHUB_OUTPUT"
+            echo "mode=promote" >> "$GITHUB_OUTPUT"
+            echo "Deploy mode: promote existing image"
+            exit 0
+          fi
+          TAG_URI="${{ steps.tag.outputs.IMAGE_TAG_URI }}"
+          DIGEST="$(gcloud artifacts docker images describe "${TAG_URI}" --format='value(image_summary.digest)' || true)"
+          if [ -z "${DIGEST}" ]; then
+            echo "ERROR: failed to resolve digest for ${TAG_URI}" >&2
+            exit 1
+          fi
+          BASEREF="${REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPO}/${IMAGE_NAME}"
+          REF="${BASEREF}@${DIGEST}"
+          echo "image_ref=${REF}" >> "$GITHUB_OUTPUT"
+          echo "mode=build" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Cloud Run (by digest)
+        run: |
+          set -euo pipefail
+          IMG="${{ steps.imgref.outputs.image_ref }}"
+          CMD=(gcloud run deploy "${SERVICE}" --project "${PROJECT_ID}" --region "${REGION}" --image "${IMG}")
+          if [ -n "${VPC_CONNECTOR:-}" ]; then
+            CMD+=(--vpc-connector "${VPC_CONNECTOR}" --vpc-egress "${VPC_EGRESS:-all-traffic}")
+          fi
+          CMD+=(--allow-unauthenticated --quiet)
+          "${CMD[@]}"
+
+      - name: Get service URL
+        id: url
+        run: |
+          set -euo pipefail
+          SU="$(gcloud run services describe "${SERVICE}" --project "${PROJECT_ID}" --region "${REGION}" --format='value(status.url)')"
+          if [ -z "${SU}" ]; then
+            echo "ERROR: failed to get Cloud Run service URL" >&2
+            exit 1
+          fi
+          echo "service_url=${SU}" >> "$GITHUB_OUTPUT"
+
+      - name: Get active revision
+        id: rev
+        run: |
+          set -euo pipefail
+          RN="$(gcloud run services describe "${SERVICE}" --project "${PROJECT_ID}" --region "${REGION}" --format='value(status.traffic[0].revisionName)')"
+          echo "revision_name=${RN}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke check
+        run: |
+          set -euo pipefail
+          TARGET="${{ steps.url.outputs.service_url }}/"
+          http_code="$(curl -sS -o /tmp/smoke-body.txt -w '%{http_code}' "${TARGET}" || true)"
+          echo "HTTP ${http_code}"
+          if [ "${http_code}" != "200" ]; then
+            echo "ERROR: smoke check failed (expected 200)" >&2
+            exit 1
+          fi
+
+      - name: Audit summary
+        if: always()
+        run: |
+          {
+            echo "## Cloud Run frontend deploy"
+            echo "- service_url: ${{ steps.url.outputs.service_url }}"
+            echo "- image_ref: ${{ steps.imgref.outputs.image_ref }}"
+            echo "- revision: ${{ steps.rev.outputs.revision_name }}"
+          } >> "$GITHUB_STEP_SUMMARY"

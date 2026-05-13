@@ -1,0 +1,254 @@
+# Build worker images, push to GAR, SSH to VM: write docker/.env.workers from Environment, then compose pull/up.
+#
+# VM must: Docker + gcloud auth for Artifact Registry; repo clone at VM_REPO_DIR.
+#
+# Contract addresses: read from contracts/deployments/<deploy_env>/<chain_id>.json (ORACLE, LENDING_POOL, PERP_ENGINE).
+# If missing or zero address, falls back to Environment variables WORKER_ORACLE_CONTRACT_ADDRESS,
+# WORKER_LENDING_POOL_CONTRACT_ADDRESS, WORKER_PERP_ENGINE_CONTRACT_ADDRESS (optional).
+#
+# GitHub Environment secrets:
+#   VM_SSH_HOST, VM_SSH_USER, VM_SSH_PRIVATE_KEY
+#   WORKER_DB_PASSWORD, WORKER_PRIVATE_KEY, WORKER_STOCK_API_KEY (required)
+#   WORKER_REDIS_PASSWORD (optional)
+#
+# GitHub Environment variables:
+#   VM_REPO_DIR (absolute repo root on VM)
+#   WORKER_RPC_URL (required)
+#   WORKER_KAFKA_BROKER, WORKER_KAFKA_TOPIC_PRICE, WORKER_DB_HOST, WORKER_DB_PORT, WORKER_DB_USER, WORKER_DB_NAME,
+#   WORKER_REDIS_HOST, WORKER_REDIS_PORT, WORKER_STOCK_API_URL, WORKER_STOCK_SYMBOLS, WORKER_RELAYER_FETCH_INTERVAL
+#   (optional; defaults match docker/.env.workers.example)
+#   WORKER_ORACLE_CONTRACT_ADDRESS, WORKER_LENDING_POOL_CONTRACT_ADDRESS, WORKER_PERP_ENGINE_CONTRACT_ADDRESS
+#   (optional fallback when deployments JSON missing or entry is zero / empty)
+name: VM workers deploy (SSH)
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: GitHub Environment (staging|prod)
+        required: true
+        type: choice
+        options:
+          - staging
+          - prod
+      deploy_env:
+        description: "Folder under contracts/deployments/ (must match committed deployment JSON)"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - testnet
+          - prod
+      chain_id:
+        description: "Chain ID in filename contracts/deployments/<deploy_env>/<chain_id>.json (e.g. 1328)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: vm-workers-${{ inputs.env }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: build-push-ssh
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    env:
+      PROJECT_ID: ${{ vars.PROJECT_ID }}
+      REGION: ${{ vars.REGION }}
+      GAR_REPO: ${{ vars.GAR_REPO }}
+    steps:
+      - name: Validate required Environment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in PROJECT_ID REGION GAR_REPO; do
+            eval "x=\${$v:-}"
+            if [ -z "${x}" ]; then
+              echo "ERROR: Environment variable $v is not set for ${{ inputs.env }}" >&2
+              exit 1
+            fi
+          done
+          if [ -z "${{ vars.VM_REPO_DIR }}" ]; then
+            echo "ERROR: VM_REPO_DIR is not set on Environment ${{ inputs.env }}" >&2
+            exit 1
+          fi
+
+      - name: Validate worker env (GitHub Environment)
+        shell: bash
+        env:
+          RPC_URL: ${{ vars.WORKER_RPC_URL }}
+          PRIVATE_KEY: ${{ secrets.WORKER_PRIVATE_KEY }}
+          DB_PASSWORD: ${{ secrets.WORKER_DB_PASSWORD }}
+          STOCK_API_KEY: ${{ secrets.WORKER_STOCK_API_KEY }}
+        run: |
+          set -euo pipefail
+          nonempty() {
+            local n="$1" v="${2:-}"
+            if [ -z "${v}" ]; then
+              echo "ERROR: ${n} is empty on Environment ${{ inputs.env }} (see workflow header for required WORKER_* secrets/vars)." >&2
+              exit 1
+            fi
+          }
+          nonempty WORKER_RPC_URL "${RPC_URL}"
+          nonempty WORKER_PRIVATE_KEY "${PRIVATE_KEY}"
+          nonempty WORKER_DB_PASSWORD "${DB_PASSWORD}"
+          nonempty WORKER_STOCK_API_KEY "${STOCK_API_KEY}"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve contract addresses from deployments JSON
+        id: contracts
+        shell: bash
+        env:
+          DEPLOY_ENV: ${{ inputs.deploy_env }}
+          CHAIN_ID: ${{ inputs.chain_id }}
+          FB_ORACLE: ${{ vars.WORKER_ORACLE_CONTRACT_ADDRESS }}
+          FB_LENDING: ${{ vars.WORKER_LENDING_POOL_CONTRACT_ADDRESS }}
+          FB_PERP: ${{ vars.WORKER_PERP_ENGINE_CONTRACT_ADDRESS }}
+        run: |
+          set -euo pipefail
+          ZERO="0x0000000000000000000000000000000000000000"
+          art="contracts/deployments/${DEPLOY_ENV}/${CHAIN_ID}.json"
+          jo="" jl="" jp=""
+          if [ -f "${art}" ]; then
+            jo=$(jq -r '.ORACLE // empty' "${art}")
+            jl=$(jq -r '.LENDING_POOL // empty' "${art}")
+            jp=$(jq -r '.PERP_ENGINE // empty' "${art}")
+            echo "Resolved from artifact: ${art}" >&2
+          else
+            echo "WARN: ${art} not found; using WORKER_* Environment variables only for contract addresses." >&2
+          fi
+          pick() {
+            local j="${1:-}" f="${2:-}"
+            if [ -n "${j}" ] && [ "${j}" != "${ZERO}" ] && [ "${j}" != "null" ]; then
+              printf '%s' "${j}"
+            else
+              printf '%s' "${f}"
+            fi
+          }
+          oracle_r=$(pick "${jo}" "${FB_ORACLE}")
+          lending_r=$(pick "${jl}" "${FB_LENDING}")
+          perp_r=$(pick "${jp}" "${FB_PERP}")
+          if [ -z "${oracle_r}" ] || [ -z "${lending_r}" ] || [ -z "${perp_r}" ]; then
+            echo "ERROR: ORACLE / LENDING_POOL / PERP_ENGINE empty after JSON + WORKER_* fallback." >&2
+            echo "Commit ${art} (from contract deploy) or set WORKER_ORACLE_CONTRACT_ADDRESS, WORKER_LENDING_POOL_CONTRACT_ADDRESS, WORKER_PERP_ENGINE_CONTRACT_ADDRESS on Environment ${{ inputs.env }}." >&2
+            exit 1
+          fi
+          echo "oracle_resolved=${oracle_r}" >> "${GITHUB_OUTPUT}"
+          echo "lending_resolved=${lending_r}" >> "${GITHUB_OUTPUT}"
+          echo "perp_resolved=${perp_r}" >> "${GITHUB_OUTPUT}"
+
+      - name: Auth to Google Cloud (Workload Identity)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push worker images
+        shell: bash
+        env:
+          PREFIX: ${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID }}/${{ vars.GAR_REPO }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_SHA}"
+          ROOT="${GITHUB_WORKSPACE}"
+          while IFS=: read -r CMD IMG; do
+            echo "=== Building ${IMG} (./cmd/${CMD}) ==="
+            docker build -f docker/cloudrun/worker.Dockerfile \
+              --build-arg "GO_CMD=${CMD}" \
+              -t "${PREFIX}/${IMG}:${TAG}" \
+              "${ROOT}"
+            docker push "${PREFIX}/${IMG}:${TAG}"
+          done <<'EOF'
+relayer:anchorstock-relayer
+ohlcv-consumer:anchorstock-ohlcv-consumer
+oracle-consumer:anchorstock-oracle-consumer
+liquidation-bot:anchorstock-liquidation-bot
+EOF
+
+      - name: Write docker/.env.workers on VM and restart workers
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          TAG: ${{ github.sha }}
+          PREFIX: ${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID }}/${{ vars.GAR_REPO }}
+          REPO_DIR: ${{ vars.VM_REPO_DIR }}
+          KAFKA_BROKER: ${{ vars.WORKER_KAFKA_BROKER || 'localhost:9092' }}
+          KAFKA_TOPIC_PRICE: ${{ vars.WORKER_KAFKA_TOPIC_PRICE || 'stock-prices' }}
+          DB_HOST: ${{ vars.WORKER_DB_HOST || 'localhost' }}
+          DB_PORT: ${{ vars.WORKER_DB_PORT || '5432' }}
+          DB_USER: ${{ vars.WORKER_DB_USER || 'anchorstock' }}
+          DB_PASSWORD: ${{ secrets.WORKER_DB_PASSWORD }}
+          DB_NAME: ${{ vars.WORKER_DB_NAME || 'anchorstock' }}
+          REDIS_HOST: ${{ vars.WORKER_REDIS_HOST || 'localhost' }}
+          REDIS_PORT: ${{ vars.WORKER_REDIS_PORT || '6379' }}
+          REDIS_PASSWORD: ${{ secrets.WORKER_REDIS_PASSWORD }}
+          RPC_URL: ${{ vars.WORKER_RPC_URL }}
+          PRIVATE_KEY: ${{ secrets.WORKER_PRIVATE_KEY }}
+          ORACLE_CONTRACT_ADDRESS: ${{ steps.contracts.outputs.oracle_resolved }}
+          LENDING_POOL_CONTRACT_ADDRESS: ${{ steps.contracts.outputs.lending_resolved }}
+          PERP_ENGINE_CONTRACT_ADDRESS: ${{ steps.contracts.outputs.perp_resolved }}
+          STOCK_API_URL: ${{ vars.WORKER_STOCK_API_URL || 'https://www.alphavantage.co/query' }}
+          STOCK_API_KEY: ${{ secrets.WORKER_STOCK_API_KEY }}
+          STOCK_SYMBOLS: ${{ vars.WORKER_STOCK_SYMBOLS || 'NVDA' }}
+          RELAYER_FETCH_INTERVAL: ${{ vars.WORKER_RELAYER_FETCH_INTERVAL || '5m' }}
+        with:
+          host: ${{ secrets.VM_SSH_HOST }}
+          username: ${{ secrets.VM_SSH_USER }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          script_stop: true
+          envs: TAG,PREFIX,REPO_DIR,KAFKA_BROKER,KAFKA_TOPIC_PRICE,DB_HOST,DB_PORT,DB_USER,DB_PASSWORD,DB_NAME,REDIS_HOST,REDIS_PORT,REDIS_PASSWORD,RPC_URL,PRIVATE_KEY,ORACLE_CONTRACT_ADDRESS,LENDING_POOL_CONTRACT_ADDRESS,PERP_ENGINE_CONTRACT_ADDRESS,STOCK_API_URL,STOCK_API_KEY,STOCK_SYMBOLS,RELAYER_FETCH_INTERVAL
+          script: |
+            set -euo pipefail
+            cd "${REPO_DIR}"
+            umask 077
+            mkdir -p docker
+            {
+              printf '%s\n' "KAFKA_BROKER=${KAFKA_BROKER}"
+              printf '%s\n' "KAFKA_TOPIC_PRICE=${KAFKA_TOPIC_PRICE}"
+              printf '%s\n' "DB_HOST=${DB_HOST}"
+              printf '%s\n' "DB_PORT=${DB_PORT}"
+              printf '%s\n' "DB_USER=${DB_USER}"
+              printf '%s\n' "DB_PASSWORD=${DB_PASSWORD}"
+              printf '%s\n' "DB_NAME=${DB_NAME}"
+              printf '%s\n' "REDIS_HOST=${REDIS_HOST}"
+              printf '%s\n' "REDIS_PORT=${REDIS_PORT}"
+              printf '%s\n' "REDIS_PASSWORD=${REDIS_PASSWORD}"
+              printf '%s\n' "RPC_URL=${RPC_URL}"
+              printf '%s\n' "PRIVATE_KEY=${PRIVATE_KEY}"
+              printf '%s\n' "ORACLE_CONTRACT_ADDRESS=${ORACLE_CONTRACT_ADDRESS}"
+              printf '%s\n' "LENDING_POOL_CONTRACT_ADDRESS=${LENDING_POOL_CONTRACT_ADDRESS}"
+              printf '%s\n' "PERP_ENGINE_CONTRACT_ADDRESS=${PERP_ENGINE_CONTRACT_ADDRESS}"
+              printf '%s\n' "STOCK_API_URL=${STOCK_API_URL}"
+              printf '%s\n' "STOCK_API_KEY=${STOCK_API_KEY}"
+              printf '%s\n' "STOCK_SYMBOLS=${STOCK_SYMBOLS}"
+              printf '%s\n' "RELAYER_FETCH_INTERVAL=${RELAYER_FETCH_INTERVAL}"
+            } > docker/.env.workers
+            export WORKER_IMAGE_PREFIX="${PREFIX}"
+            export WORKER_IMAGE_TAG="${TAG}"
+            docker compose -f docker/docker-compose.workers.yml pull
+            docker compose -f docker/docker-compose.workers.yml up -d
+
+      - name: Audit summary
+        if: always()
+        run: |
+          {
+            echo "## VM workers deploy"
+            echo "- env: ${{ inputs.env }}"
+            echo "- tag: ${GITHUB_SHA}"
+            echo "- image prefix: ${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID }}/${{ vars.GAR_REPO }}"
+            echo "- deployments: ${{ inputs.deploy_env }}/${{ inputs.chain_id }}.json + WORKER_* fallback"
+            echo "- wrote \`docker/.env.workers\` on VM (contract addresses from resolve step)"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,10 +1,24 @@
-# Testnet only: manual trigger + broadcast deploy + upload deployment artifact.
-# Do not add push triggers. Do not use production mainnet keys in GitHub Secrets long-term.
+# Testnet only: manual trigger + broadcast deploy + upload deployment artifact + commit JSON to repo.
+#
+# GitHub Environment (pick via workflow input `github_environment`):
+#   Secrets (required): TESTNET_DEPLOYER_PRIVATE_KEY, TESTNET_RPC_URL
+#   Secrets (optional): DEPLOYMENTS_WRITE_TOKEN — fine-grained PAT, contents:write, when branch protection
+#     blocks pushes from GITHUB_TOKEN
+#   Variables (optional): TESTNET_EXPLORER_ADDRESS_PREFIX — passed to Deploy script as EXPLORER_BASE
+#
+# Configure: Repo → Settings → Environments → create/select name (e.g. staging or contract-testnet) →
+#   Environment secrets / Environment variables as above. Do not use production mainnet keys long-term.
+# Do not add push triggers.
 name: Contracts (testnet deploy)
 
 on:
   workflow_dispatch:
     inputs:
+      github_environment:
+        description: "GitHub Environment name that holds TESTNET_* secrets (Settings → Environments)"
+        required: true
+        type: string
+        default: staging
       deploy_env:
         description: "Artifact folder under contracts/deployments/<env>/"
         required: true
@@ -23,12 +37,13 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   deploy:
     name: forge-script-broadcast-artifact
     runs-on: ubuntu-latest
+    environment: ${{ inputs.github_environment }}
     env:
       DEPLOY_ENV: ${{ inputs.deploy_env }}
       CHAIN_ID: ${{ inputs.chain_id }}
@@ -93,6 +108,27 @@ jobs:
             exit 1
           fi
           echo "OK: ${path}"
+
+      - name: Commit and push deployment JSON
+        env:
+          PUSH_TOKEN: ${{ secrets.DEPLOYMENTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          rel="contracts/deployments/${DEPLOY_ENV}/${CHAIN_ID}.json"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "${rel}"
+          if git diff --staged --quiet; then
+            echo "No changes to ${rel}; skipping commit."
+            exit 0
+          fi
+          git commit -m "chore(contracts): deployment ${DEPLOY_ENV}/${CHAIN_ID}.json [skip ci]"
+          branch="${GITHUB_REF_NAME}"
+          if [ -n "${PUSH_TOKEN:-}" ]; then
+            git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          fi
+          git pull --rebase origin "${branch}"
+          git push origin "HEAD:${branch}"
 
       - name: Upload deployment JSON artifact
         uses: actions/upload-artifact@v4

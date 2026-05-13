@@ -1,0 +1,109 @@
+# Build backfill image, push to GAR, deploy/update Cloud Run Job (VPC + DB + Alpha Vantage env).
+# Run job execution separately via "Backfill job execute" workflow.
+#
+# Environment variables: PROJECT_ID, REGION, GAR_REPO, VPC_CONNECTOR, DB_HOST, DB_PORT, DB_USER, DB_NAME, STOCK_API_URL, BACKFILL_JOB_NAME (Cloud Run Job resource name)
+# Secrets: DB_PASSWORD, STOCK_API_KEY, GCP_*
+name: Backfill job deploy (Cloud Run Job)
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        required: true
+        type: choice
+        options:
+          - staging
+          - prod
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: build-push-job
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    env:
+      PROJECT_ID: ${{ vars.PROJECT_ID }}
+      REGION: ${{ vars.REGION }}
+      GAR_REPO: ${{ vars.GAR_REPO }}
+      JOB_NAME: ${{ vars.BACKFILL_JOB_NAME }}
+      VPC_CONNECTOR: ${{ vars.VPC_CONNECTOR }}
+      DB_HOST: ${{ vars.DB_HOST }}
+      DB_PORT: ${{ vars.DB_PORT || '5432' }}
+      DB_USER: ${{ vars.DB_USER || 'anchorstock' }}
+      DB_NAME: ${{ vars.DB_NAME || 'anchorstock' }}
+      STOCK_API_URL: ${{ vars.STOCK_API_URL }}
+    steps:
+      - name: Validate configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in PROJECT_ID REGION GAR_REPO JOB_NAME VPC_CONNECTOR DB_HOST DB_USER DB_NAME STOCK_API_URL; do
+            eval "x=\${$v:-}"
+            if [ -z "${x}" ]; then
+              echo "ERROR: missing Environment var $v" >&2
+              exit 1
+            fi
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Auth to Google Cloud (Workload Identity)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push image
+        id: tag
+        shell: bash
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          STOCK_API_KEY: ${{ secrets.STOCK_API_KEY }}
+        run: |
+          set -euo pipefail
+          IMAGE_TAG_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPO}/anchorstock-backfill:${GITHUB_SHA}"
+          docker build -f docker/cloudrun/backfill.Dockerfile -t "${IMAGE_TAG_URI}" .
+          docker push "${IMAGE_TAG_URI}"
+          DIGEST="$(gcloud artifacts docker images describe "${IMAGE_TAG_URI}" --format='value(image_summary.digest)')"
+          REF="${REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPO}/anchorstock-backfill@${DIGEST}"
+          echo "image_ref=${REF}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy Cloud Run Job
+        shell: bash
+        env:
+          IMG: ${{ steps.tag.outputs.image_ref }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          STOCK_API_KEY: ${{ secrets.STOCK_API_KEY }}
+        run: |
+          set -euo pipefail
+          gcloud run jobs deploy "${JOB_NAME}" \
+            --project "${PROJECT_ID}" \
+            --region "${REGION}" \
+            --image "${IMG}" \
+            --tasks 1 \
+            --parallelism 1 \
+            --max-retries 0 \
+            --task-timeout 3600s \
+            --vpc-connector "${VPC_CONNECTOR}" \
+            --vpc-egress all-traffic \
+            --set-env-vars "DB_HOST=${DB_HOST},DB_PORT=${DB_PORT},DB_USER=${DB_USER},DB_NAME=${DB_NAME},DB_PASSWORD=${DB_PASSWORD},STOCK_API_URL=${STOCK_API_URL},STOCK_API_KEY=${STOCK_API_KEY}" \
+            --quiet
+
+      - name: Audit summary
+        if: always()
+        run: |
+          {
+            echo "## Backfill Cloud Run Job"
+            echo "- job: ${JOB_NAME}"
+            echo "- image: ${{ steps.tag.outputs.image_ref }}"
+          } >> "$GITHUB_STEP_SUMMARY"
