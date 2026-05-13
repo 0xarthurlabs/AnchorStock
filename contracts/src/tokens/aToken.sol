@@ -9,10 +9,10 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  * @author AnchorStock
  * @notice 存款凭证代币，代表用户在借贷池中的存款 / Deposit receipt token representing user deposits in lending pool
  * @dev 使用 ERC20 标准，18 位精度 / Uses ERC20 standard with 18 decimals
- * 
+ *
  * 当用户存入 RWA 到 LendingPool 时，会收到对应数量的 aToken 作为凭证
  * When users deposit RWA to LendingPool, they receive corresponding aToken as receipt
- * 
+ *
  * 示例：aNVDA 代表存入的 NVDA RWA 凭证 / Example: aNVDA represents deposited NVDA RWA receipt
  */
 contract aToken is ERC20, Ownable {
@@ -37,12 +37,10 @@ contract aToken is ERC20, Ownable {
      * @param _underlyingAsset 底层资产地址 / Underlying asset address
      * @param _owner 合约所有者（通常是 LendingPool）/ Contract owner (usually LendingPool)
      */
-    constructor(
-        string memory _name,
-        string memory _symbol,
-        address _underlyingAsset,
-        address _owner
-    ) ERC20(_name, _symbol) Ownable(_owner) {
+    constructor(string memory _name, string memory _symbol, address _underlyingAsset, address _owner)
+        ERC20(_name, _symbol)
+        Ownable(_owner)
+    {
         require(_underlyingAsset != address(0), "aToken: invalid underlying asset");
         underlyingAsset = _underlyingAsset;
     }

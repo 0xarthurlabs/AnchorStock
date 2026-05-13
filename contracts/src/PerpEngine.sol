@@ -14,7 +14,7 @@ import {aToken} from "./tokens/aToken.sol";
  * @author AnchorStock
  * @notice 永续合约引擎：支持使用 aToken 作为保证金开设美股多/空仓位 / Perpetual engine: support using aToken as collateral to open long/short positions
  * @dev 实现简化版 PnL 计算与资金费率，所有计算归一化到 1e18 精度 / Implements simplified PnL calculation and funding rate, all calculations normalized to 1e18
- * 
+ *
  * 核心功能 / Core Features:
  * - 使用 aToken 作为保证金 / Use aToken as collateral
  * - 支持多/空仓位 / Support long/short positions
@@ -28,17 +28,17 @@ contract PerpEngine is Ownable, ReentrancyGuard {
 
     /// @notice 仓位方向枚举 / Position direction enum
     enum PositionSide {
-        LONG,  // 做多 / Long
-        SHORT  // 做空 / Short
+        LONG, // 做多 / Long
+        SHORT // 做空 / Short
     }
 
     /// @notice 仓位信息结构体 / Position information struct
     struct Position {
-        PositionSide side;           // 仓位方向 / Position side
-        uint256 size;                // 仓位大小（归一化到 18 位精度）/ Position size (normalized to 18 decimals)
-        uint256 entryPrice;          // 开仓价格（归一化到 18 位精度）/ Entry price (normalized to 18 decimals)
-        uint256 collateral;          // 保证金（aToken 数量，18 位精度）/ Collateral (aToken amount, 18 decimals)
-        uint256 entryTimestamp;      // 开仓时间戳 / Entry timestamp
+        PositionSide side; // 仓位方向 / Position side
+        uint256 size; // 仓位大小（归一化到 18 位精度）/ Position size (normalized to 18 decimals)
+        uint256 entryPrice; // 开仓价格（归一化到 18 位精度）/ Entry price (normalized to 18 decimals)
+        uint256 collateral; // 保证金（aToken 数量，18 位精度）/ Collateral (aToken amount, 18 decimals)
+        uint256 entryTimestamp; // 开仓时间戳 / Entry timestamp
         uint256 lastFundingTimestamp; // 上次资金费率更新时间戳 / Last funding rate update timestamp
     }
 
@@ -67,22 +67,11 @@ contract PerpEngine is Ownable, ReentrancyGuard {
     uint256 public fundingInterval = 8 hours;
 
     /// @notice 事件：开仓 / Event: Position opened
-    event PositionOpened(
-        address indexed user,
-        PositionSide side,
-        uint256 size,
-        uint256 entryPrice,
-        uint256 collateral
-    );
+    event PositionOpened(address indexed user, PositionSide side, uint256 size, uint256 entryPrice, uint256 collateral);
 
     /// @notice 事件：平仓 / Event: Position closed
     event PositionClosed(
-        address indexed user,
-        PositionSide side,
-        uint256 size,
-        uint256 exitPrice,
-        uint256 pnl,
-        uint256 fundingFee
+        address indexed user, PositionSide side, uint256 size, uint256 exitPrice, uint256 pnl, uint256 fundingFee
     );
 
     /// @notice 事件：追加保证金 / Event: Collateral added
@@ -122,7 +111,9 @@ contract PerpEngine is Ownable, ReentrancyGuard {
     /// @notice 检查失败：健康因子未低至可清算 / Check failed: health factor not low enough for liquidation
     event CheckFailedLiquidationHealthFactor(address indexed user, uint256 healthFactor);
     /// @notice 检查失败：提取后保证金不足 / Check failed: insufficient collateral after withdrawal
-    event CheckFailedInsufficientCollateralAfterWithdraw(address indexed user, uint256 newCollateral, uint256 requiredMaintenance);
+    event CheckFailedInsufficientCollateralAfterWithdraw(
+        address indexed user, uint256 newCollateral, uint256 requiredMaintenance
+    );
     /// @notice 检查失败：健康因子过低（提取保证金）/ Check failed: health factor too low (withdraw)
     event CheckFailedHealthFactorTooLow(address indexed user, uint256 healthFactor);
     /// @notice 检查失败：参数超限（admin）/ Check failed: parameter out of range (admin)
@@ -153,12 +144,7 @@ contract PerpEngine is Ownable, ReentrancyGuard {
      * @param _collateralToken aToken 地址（作为保证金）/ aToken address (as collateral)
      * @param _owner 合约所有者地址 / Contract owner address
      */
-    constructor(
-        address _oracle,
-        string memory _stockSymbol,
-        address _collateralToken,
-        address _owner
-    ) Ownable(_owner) {
+    constructor(address _oracle, string memory _stockSymbol, address _collateralToken, address _owner) Ownable(_owner) {
         if (_oracle == address(0)) {
             emit CheckFailedInvalidAddress("PerpEngine: invalid oracle", _oracle);
             require(false, "PerpEngine: invalid oracle");
@@ -171,7 +157,7 @@ contract PerpEngine is Ownable, ReentrancyGuard {
             emit CheckFailedInvalidAddress("PerpEngine: invalid owner", _owner);
             require(false, "PerpEngine: invalid owner");
         }
-        
+
         oracle = StockOracle(_oracle);
         stockSymbol = _stockSymbol;
         collateralToken = aToken(_collateralToken);
@@ -183,11 +169,7 @@ contract PerpEngine is Ownable, ReentrancyGuard {
      * @param size 仓位大小（归一化到 18 位精度）/ Position size (normalized to 18 decimals)
      * @param collateralAmount 保证金数量（aToken，18 位精度）/ Collateral amount (aToken, 18 decimals)
      */
-    function openPosition(
-        PositionSide side,
-        uint256 size,
-        uint256 collateralAmount
-    ) external nonReentrant {
+    function openPosition(PositionSide side, uint256 size, uint256 collateralAmount) external nonReentrant {
         if (size == 0) {
             emit CheckFailedAmountZero(msg.sender, "openPosition: size");
             require(false, "PerpEngine: size must be greater than 0");
@@ -196,31 +178,31 @@ contract PerpEngine is Ownable, ReentrancyGuard {
             emit CheckFailedAmountZero(msg.sender, "openPosition: collateral");
             require(false, "PerpEngine: collateral must be greater than 0");
         }
-        
+
         // 检查价格是否过期（Market Hours Trap）/ Check if price is stale (Market Hours Trap)
-        (uint256 normalizedPrice, , bool isStale) = oracle.getPriceWithStaleCheck(stockSymbol);
+        (uint256 normalizedPrice,, bool isStale) = oracle.getPriceWithStaleCheck(stockSymbol);
         if (isStale && oracle.circuitBreakerEnabled()) {
             emit CheckFailedPriceStale(msg.sender, "openPosition");
             revert PriceStale();
         }
-        
+
         // normalizedPrice 已经从 getPriceWithStaleCheck 返回（已归一化）/ normalizedPrice already returned from getPriceWithStaleCheck (normalized)
-        
+
         // 检查初始保证金率 / Check initial margin rate
         uint256 requiredCollateral = DeFiMath.mul(size, initialMarginRate);
         if (collateralAmount < requiredCollateral) {
             emit CheckFailedInsufficientCollateral(msg.sender, requiredCollateral, collateralAmount);
             require(false, "PerpEngine: insufficient collateral for initial margin");
         }
-        
+
         // 如果用户已有仓位，检查是否可以合并 / If user has existing position, check if can merge
         Position storage position = positions[msg.sender];
         if (position.size > 0) {
             // 如果方向相同，合并仓位 / If same direction, merge positions
             if (position.side == side) {
                 // 计算加权平均开仓价格 / Calculate weighted average entry price
-                uint256 totalValue = DeFiMath.mul(position.size, position.entryPrice) + 
-                                    DeFiMath.mul(size, normalizedPrice);
+                uint256 totalValue =
+                    DeFiMath.mul(position.size, position.entryPrice) + DeFiMath.mul(size, normalizedPrice);
                 uint256 totalSize = position.size + size;
                 position.entryPrice = DeFiMath.div(totalValue, totalSize);
                 position.size = totalSize;
@@ -239,10 +221,10 @@ contract PerpEngine is Ownable, ReentrancyGuard {
             position.entryTimestamp = block.timestamp;
             position.lastFundingTimestamp = block.timestamp;
         }
-        
+
         // 转移保证金 / Transfer collateral
         IERC20(address(collateralToken)).safeTransferFrom(msg.sender, address(this), collateralAmount);
-        
+
         emit PositionOpened(msg.sender, side, size, normalizedPrice, collateralAmount);
     }
 
@@ -255,33 +237,33 @@ contract PerpEngine is Ownable, ReentrancyGuard {
         if (position.size == 0) {
             revert PositionNotFound();
         }
-        
+
         // 如果 size 为 0，平仓全部 / If size is 0, close all
         if (size == 0) {
             size = position.size;
         }
-        
+
         if (size > position.size) {
             emit CheckFailedCloseSizeExceedsPosition(msg.sender, size, position.size);
             require(false, "PerpEngine: close size exceeds position size");
         }
-        
+
         // 获取当前价格 / Get current price
-        (uint256 normalizedPrice, , ) = oracle.getPriceWithStaleCheck(stockSymbol);
-        
+        (uint256 normalizedPrice,,) = oracle.getPriceWithStaleCheck(stockSymbol);
+
         // 计算 PnL / Calculate PnL
         uint256 pnl = _calculatePnL(position, size, normalizedPrice);
-        
+
         // 计算资金费率费用 / Calculate funding fee
         uint256 fundingFee = _calculateFundingFee(position, size);
-        
+
         // 计算净收益（PnL - 资金费率费用）/ Calculate net profit (PnL - funding fee)
         int256 netPnL = int256(pnl) - int256(fundingFee);
-        
+
         // 计算应返还的保证金 / Calculate collateral to return
         uint256 collateralRatio = DeFiMath.div(position.collateral, position.size);
         uint256 collateralToReturn = DeFiMath.mul(size, collateralRatio);
-        
+
         // 如果净收益为正，添加到保证金中 / If net PnL is positive, add to collateral
         if (netPnL > 0) {
             collateralToReturn += uint256(netPnL);
@@ -295,11 +277,11 @@ contract PerpEngine is Ownable, ReentrancyGuard {
                 collateralToReturn -= loss;
             }
         }
-        
+
         // 更新仓位 / Update position
         position.size -= size;
         position.collateral -= DeFiMath.mul(size, collateralRatio);
-        
+
         // 如果仓位已全部平仓，清除仓位信息 / If position is fully closed, clear position info
         if (position.size == 0) {
             delete positions[msg.sender];
@@ -307,20 +289,13 @@ contract PerpEngine is Ownable, ReentrancyGuard {
             // 更新资金费率时间戳 / Update funding timestamp
             position.lastFundingTimestamp = block.timestamp;
         }
-        
+
         // 返还保证金 / Return collateral
         if (collateralToReturn > 0) {
             IERC20(address(collateralToken)).safeTransfer(msg.sender, collateralToReturn);
         }
-        
-        emit PositionClosed(
-            msg.sender,
-            position.side,
-            size,
-            normalizedPrice,
-            pnl,
-            fundingFee
-        );
+
+        emit PositionClosed(msg.sender, position.side, size, normalizedPrice, pnl, fundingFee);
     }
 
     /**
@@ -332,15 +307,15 @@ contract PerpEngine is Ownable, ReentrancyGuard {
             emit CheckFailedAmountZero(msg.sender, "addCollateral");
             require(false, "PerpEngine: amount must be greater than 0");
         }
-        
+
         Position storage position = positions[msg.sender];
         if (position.size == 0) {
             revert PositionNotFound();
         }
-        
+
         position.collateral += amount;
         IERC20(address(collateralToken)).safeTransferFrom(msg.sender, address(this), amount);
-        
+
         emit CollateralAdded(msg.sender, amount);
     }
 
@@ -355,21 +330,21 @@ contract PerpEngine is Ownable, ReentrancyGuard {
             emit CheckFailedNoPositionToLiquidate(user);
             require(false, "PerpEngine: no position to liquidate");
         }
-        
+
         // 检查健康因子是否过低（< 1.0 表示可以清算）/ Check if health factor is too low (< 1.0 means can be liquidated)
         uint256 healthFactor = getPositionHealthFactor(user);
         if (healthFactor >= 1e18) {
             emit CheckFailedLiquidationHealthFactor(user, healthFactor);
             require(false, "PerpEngine: health factor not low enough");
         }
-        
+
         // 获取当前价格 / Get current price
-        (uint256 normalizedPrice, , ) = oracle.getPriceWithStaleCheck(stockSymbol);
-        
+        (uint256 normalizedPrice,,) = oracle.getPriceWithStaleCheck(stockSymbol);
+
         // 计算 PnL 和资金费率费用 / Calculate PnL and funding fee
         uint256 pnl = _calculatePnL(position, position.size, normalizedPrice);
         uint256 fundingFee = _calculateFundingFee(position, position.size);
-        
+
         // 计算实际盈亏 / Calculate actual PnL
         int256 actualPnL;
         if (position.side == PositionSide.LONG) {
@@ -387,10 +362,10 @@ contract PerpEngine is Ownable, ReentrancyGuard {
                 actualPnL = -int256(loss) - int256(fundingFee);
             }
         }
-        
+
         // 计算净保证金（可能为负）/ Calculate net collateral (may be negative)
         int256 netCollateral = int256(position.collateral) + actualPnL;
-        
+
         // 清算人可以获得所有剩余保证金 + 清算奖励 / Liquidator gets all remaining collateral + liquidation bonus
         uint256 collateralToLiquidator = 0;
         if (netCollateral > 0) {
@@ -398,7 +373,7 @@ contract PerpEngine is Ownable, ReentrancyGuard {
             uint256 remainingCollateral = uint256(netCollateral);
             uint256 liquidationBonus = DeFiMath.mul(remainingCollateral, liquidationBonusRate);
             collateralToLiquidator = remainingCollateral + liquidationBonus;
-            
+
             // 如果奖励超过合约余额，只给合约中有的部分 / If bonus exceeds contract balance, only give what's available
             uint256 contractBalance = collateralToken.balanceOf(address(this));
             if (collateralToLiquidator > contractBalance) {
@@ -413,28 +388,21 @@ contract PerpEngine is Ownable, ReentrancyGuard {
                 collateralToLiquidator = minBonus > contractBalance ? contractBalance : minBonus;
             }
         }
-        
+
         // 保存仓位信息用于事件 / Save position info for event
         PositionSide side = position.side;
         uint256 size = position.size;
         uint256 collateral = position.collateral;
-        
+
         // 清除仓位 / Clear position
         delete positions[user];
-        
+
         // 转移保证金给清算人 / Transfer collateral to liquidator
         if (collateralToLiquidator > 0) {
             IERC20(address(collateralToken)).safeTransfer(msg.sender, collateralToLiquidator);
         }
-        
-        emit PositionLiquidated(
-            user,
-            msg.sender,
-            side,
-            size,
-            collateral,
-            collateralToLiquidator
-        );
+
+        emit PositionLiquidated(user, msg.sender, side, size, collateral, collateralToLiquidator);
     }
 
     /**
@@ -443,28 +411,25 @@ contract PerpEngine is Ownable, ReentrancyGuard {
      */
     function withdrawCollateral(uint256 amount) external nonReentrant {
         require(amount > 0, "PerpEngine: amount must be greater than 0");
-        
+
         Position storage position = positions[msg.sender];
         if (position.size == 0) {
             revert PositionNotFound();
         }
-        
+
         // 检查提取后是否满足维持保证金率 / Check if withdrawal satisfies maintenance margin rate
         uint256 newCollateral = position.collateral - amount;
         uint256 requiredMaintenanceMargin = DeFiMath.mul(position.size, maintenanceMarginRate);
-        
-        require(
-            newCollateral >= requiredMaintenanceMargin,
-            "PerpEngine: insufficient collateral after withdrawal"
-        );
-        
+
+        require(newCollateral >= requiredMaintenanceMargin, "PerpEngine: insufficient collateral after withdrawal");
+
         // 检查健康因子 / Check health factor
         uint256 healthFactor = getPositionHealthFactor(msg.sender);
         require(healthFactor >= 1e18, "PerpEngine: health factor too low");
-        
+
         position.collateral = newCollateral;
         IERC20(address(collateralToken)).safeTransfer(msg.sender, amount);
-        
+
         emit CollateralWithdrawn(msg.sender, amount);
     }
 
@@ -479,17 +444,17 @@ contract PerpEngine is Ownable, ReentrancyGuard {
         if (position.size == 0) {
             return (0, 0);
         }
-        
+
         // 获取当前价格 / Get current price
         (uint256 price,) = oracle.getPrice(stockSymbol);
         uint256 normalizedPrice = DeFiMath.normalizeOraclePrice(price);
-        
+
         // 计算 PnL（只返回盈利部分）/ Calculate PnL (only returns profit)
         uint256 pnlAmount = _calculatePnL(position, position.size, normalizedPrice);
-        
+
         // 计算资金费率费用 / Calculate funding fee
         fundingFee = _calculateFundingFee(position, position.size);
-        
+
         // 计算实际盈亏（考虑亏损情况）/ Calculate actual PnL (considering loss)
         // 做多：如果价格下跌，计算亏损 / Long: if price drops, calculate loss
         // 做空：如果价格上涨，计算亏损 / Short: if price rises, calculate loss
@@ -513,7 +478,7 @@ contract PerpEngine is Ownable, ReentrancyGuard {
                 actualPnL = -int256(loss) - int256(fundingFee);
             }
         }
-        
+
         pnl = actualPnL;
     }
 
@@ -527,17 +492,17 @@ contract PerpEngine is Ownable, ReentrancyGuard {
         if (position.size == 0) {
             return type(uint256).max;
         }
-        
+
         // 获取当前价格 / Get current price
         (uint256 price,) = oracle.getPrice(stockSymbol);
         uint256 normalizedPrice = DeFiMath.normalizeOraclePrice(price);
-        
+
         // 计算 PnL（只返回盈利部分）/ Calculate PnL (only returns profit)
         uint256 pnlAmount = _calculatePnL(position, position.size, normalizedPrice);
-        
+
         // 计算资金费率费用 / Calculate funding fee
         uint256 fundingFee = _calculateFundingFee(position, position.size);
-        
+
         // 计算实际盈亏（考虑亏损情况）/ Calculate actual PnL (considering loss)
         int256 actualPnL;
         if (position.side == PositionSide.LONG) {
@@ -559,21 +524,21 @@ contract PerpEngine is Ownable, ReentrancyGuard {
                 actualPnL = -int256(loss) - int256(fundingFee);
             }
         }
-        
+
         // 计算净保证金（保证金 + 实际 PnL）/ Calculate net collateral (collateral + actual PnL)
         int256 netCollateral = int256(position.collateral) + actualPnL;
-        
+
         if (netCollateral < 0) {
             return 0;
         }
-        
+
         // 计算维持保证金要求 / Calculate maintenance margin requirement
         uint256 requiredMargin = DeFiMath.mul(position.size, maintenanceMarginRate);
-        
+
         if (requiredMargin == 0) {
             return type(uint256).max;
         }
-        
+
         // 健康因子 = 净保证金 / 维持保证金要求 / Health factor = net collateral / maintenance margin requirement
         return DeFiMath.div(uint256(netCollateral) * 1e18, requiredMargin);
     }
@@ -586,11 +551,11 @@ contract PerpEngine is Ownable, ReentrancyGuard {
      * @return pnl 盈亏（归一化到 18 位精度，可能为 0 如果亏损）/ PnL (normalized to 18 decimals, may be 0 if loss)
      * @dev 只返回盈利部分，亏损由调用方从保证金中扣除 / Only returns profit, loss is deducted from collateral by caller
      */
-    function _calculatePnL(
-        Position memory position,
-        uint256 size,
-        uint256 currentPrice
-    ) internal pure returns (uint256) {
+    function _calculatePnL(Position memory position, uint256 size, uint256 currentPrice)
+        internal
+        pure
+        returns (uint256)
+    {
         if (position.side == PositionSide.LONG) {
             // 做多：价格上涨盈利 / Long: profit when price rises
             if (currentPrice > position.entryPrice) {
@@ -614,22 +579,19 @@ contract PerpEngine is Ownable, ReentrancyGuard {
      * @param size 仓位大小 / Position size
      * @return fee 资金费率费用（归一化到 18 位精度）/ Funding fee (normalized to 18 decimals)
      */
-    function _calculateFundingFee(
-        Position memory position,
-        uint256 size
-    ) internal view returns (uint256) {
+    function _calculateFundingFee(Position memory position, uint256 size) internal view returns (uint256) {
         if (position.lastFundingTimestamp == 0) {
             return 0;
         }
-        
+
         // 计算经过的时间（秒）/ Calculate elapsed time (seconds)
         uint256 elapsedTime = block.timestamp - position.lastFundingTimestamp;
-        
+
         // 计算资金费率费用 = 仓位大小 * 资金费率 * 经过时间 / 年 / Funding fee = position size * funding rate * elapsed time / year
         uint256 fee = DeFiMath.mul(size, fundingRate);
         fee = DeFiMath.mul(fee, elapsedTime);
         fee = fee / 365 days;
-        
+
         return fee;
     }
 

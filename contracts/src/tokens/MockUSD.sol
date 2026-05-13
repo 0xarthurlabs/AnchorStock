@@ -49,7 +49,7 @@ contract MockUSD is ERC20, Ownable {
             emit CheckFailedArraysLengthMismatch(recipients.length, amounts.length);
             require(false, "MockUSD: arrays length mismatch");
         }
-        
+
         for (uint256 i = 0; i < recipients.length; i++) {
             if (recipients[i] == address(0)) {
                 emit CheckFailedMintToZeroAddress(recipients[i]);

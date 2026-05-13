@@ -16,7 +16,7 @@ import {MockUSD} from "./tokens/MockUSD.sol";
  * @author AnchorStock
  * @notice 借贷池：支持存入 RWA 借出 USD，或存入 USD 赚取利息 / Lending pool: deposit RWA to borrow USD, or deposit USD to earn interest
  * @dev 使用线性利息模型，所有计算归一化到 1e18 精度 / Uses linear interest model, all calculations normalized to 1e18
- * 
+ *
  * 核心功能 / Core Features:
  * - Deposit RWA -> Mint aToken (存款凭证) / Deposit RWA -> Mint aToken (deposit receipt)
  * - Borrow USD (基于抵押品) / Borrow USD (based on collateral)
@@ -79,7 +79,13 @@ contract LendingPool is Ownable, ReentrancyGuard {
     event Repaid(address indexed user, uint256 amount, uint256 interest);
 
     /// @notice 事件：清算 / Event: Liquidation
-    event Liquidated(address indexed user, address indexed liquidator, uint256 collateralAmount, uint256 debtAmount, uint256 liquidationBonus);
+    event Liquidated(
+        address indexed user,
+        address indexed liquidator,
+        uint256 collateralAmount,
+        uint256 debtAmount,
+        uint256 liquidationBonus
+    );
 
     // ============ 检查失败事件（埋点含相关参数）/ Check Failure Events (with relevant params) ============
     /// @notice 检查失败：无效地址 / Check failed: invalid address
@@ -116,13 +122,9 @@ contract LendingPool is Ownable, ReentrancyGuard {
      * @param _stockSymbol 股票符号（如 "NVDA"）/ Stock symbol (e.g., "NVDA")
      * @param _owner 合约所有者 / Contract owner
      */
-    constructor(
-        address _rwaToken,
-        address _usdToken,
-        address _oracle,
-        string memory _stockSymbol,
-        address _owner
-    ) Ownable(_owner) {
+    constructor(address _rwaToken, address _usdToken, address _oracle, string memory _stockSymbol, address _owner)
+        Ownable(_owner)
+    {
         if (_rwaToken == address(0)) {
             emit CheckFailedInvalidAddress("LendingPool: invalid RWA token", _rwaToken);
             require(false, "LendingPool: invalid RWA token");
@@ -135,7 +137,7 @@ contract LendingPool is Ownable, ReentrancyGuard {
             emit CheckFailedInvalidAddress("LendingPool: invalid oracle", _oracle);
             require(false, "LendingPool: invalid oracle");
         }
-        
+
         rwaToken = USStockRWA(_rwaToken);
         usdToken = MockUSD(_usdToken);
         oracle = StockOracle(_oracle);
@@ -147,7 +149,7 @@ contract LendingPool is Ownable, ReentrancyGuard {
         string memory rwaSymbol = rwaToken.symbol();
         string memory aTokenName = string(abi.encodePacked("Anchor ", rwaName));
         string memory aTokenSymbol = string(abi.encodePacked("a", rwaSymbol));
-        
+
         aToken aRWA = new aToken(aTokenName, aTokenSymbol, _rwaToken, address(this));
         aTokens[_rwaToken] = address(aRWA);
     }
@@ -161,17 +163,17 @@ contract LendingPool is Ownable, ReentrancyGuard {
             emit CheckFailedAmountZero(msg.sender, "depositRWA");
             require(false, "LendingPool: amount must be greater than 0");
         }
-        
+
         // 转移 RWA 代币到池子 / Transfer RWA tokens to pool
         IERC20(address(rwaToken)).safeTransferFrom(msg.sender, address(this), amount);
-        
+
         // 更新存款余额（已经是 18 位精度，无需归一化）/ Update deposit balance (already 18 decimals, no normalization needed)
         deposits[msg.sender][address(rwaToken)] += amount;
-        
+
         // 铸造 aToken 给用户 / Mint aToken to user
         address aTokenAddress = aTokens[address(rwaToken)];
         aToken(aTokenAddress).mint(msg.sender, amount);
-        
+
         emit Deposited(msg.sender, address(rwaToken), amount, amount);
     }
 
@@ -188,24 +190,24 @@ contract LendingPool is Ownable, ReentrancyGuard {
             emit CheckFailedInsufficientDeposit(msg.sender, amount, deposits[msg.sender][address(rwaToken)]);
             require(false, "LendingPool: insufficient deposit");
         }
-        
+
         // 检查健康因子（提取后不能低于清算阈值）/ Check health factor (must not be below liquidation threshold after withdrawal)
         uint256 newHealthFactor = _calculateHealthFactorAfterWithdraw(msg.sender, amount);
         if (newHealthFactor < liquidationThreshold) {
             emit CheckFailedHealthFactorTooLow(msg.sender, newHealthFactor, liquidationThreshold);
             require(false, "LendingPool: health factor too low");
         }
-        
+
         // 更新存款余额 / Update deposit balance
         deposits[msg.sender][address(rwaToken)] -= amount;
-        
+
         // 销毁 aToken / Burn aToken
         address aTokenAddress = aTokens[address(rwaToken)];
         aToken(aTokenAddress).burn(msg.sender, amount);
-        
+
         // 转移 RWA 代币给用户 / Transfer RWA tokens to user
         IERC20(address(rwaToken)).safeTransfer(msg.sender, amount);
-        
+
         emit Withdrawn(msg.sender, address(rwaToken), amount, amount);
     }
 
@@ -218,31 +220,31 @@ contract LendingPool is Ownable, ReentrancyGuard {
             emit CheckFailedAmountZero(msg.sender, "borrowUSD");
             require(false, "LendingPool: amount must be greater than 0");
         }
-        
+
         // 归一化借款金额到 18 位精度 / Normalize borrow amount to 18 decimals
         uint256 normalizedAmount = DeFiMath.normalizeUSDC(amount);
-        
+
         // 检查借款限额 / Check borrow limit
         uint256 maxBorrow = _calculateMaxBorrow(msg.sender);
         if (normalizedAmount > maxBorrow) {
             emit CheckFailedBorrowLimitExceeded(msg.sender, normalizedAmount, maxBorrow);
             require(false, "LendingPool: borrow limit exceeded");
         }
-        
+
         // 更新借款余额 / Update borrow balance
         if (borrows[msg.sender] == 0) {
             borrowTimestamps[msg.sender] = block.timestamp;
         }
         borrows[msg.sender] += normalizedAmount;
-        
+
         // 检查健康因子 / Check health factor
         uint256 healthFactor = getAccountHealthFactor(msg.sender);
         require(healthFactor >= liquidationThreshold, "LendingPool: health factor too low");
-        
+
         // 转移 USD 给用户（反归一化到 6 位精度）/ Transfer USD to user (denormalize to 6 decimals)
         uint256 usdAmount = DeFiMath.denormalizeToUSDC(normalizedAmount);
         IERC20(address(usdToken)).safeTransfer(msg.sender, usdAmount);
-        
+
         emit Borrowed(msg.sender, normalizedAmount, block.timestamp);
     }
 
@@ -255,23 +257,23 @@ contract LendingPool is Ownable, ReentrancyGuard {
             emit CheckFailedAmountZero(msg.sender, "repayUSD");
             require(false, "LendingPool: amount must be greater than 0");
         }
-        
+
         // 归一化还款金额到 18 位精度 / Normalize repay amount to 18 decimals
         uint256 normalizedAmount = DeFiMath.normalizeUSDC(amount);
-        
+
         // 计算应还总额（本金 + 利息）/ Calculate total amount to repay (principal + interest)
         uint256 totalDebt = getTotalDebt(msg.sender);
-        
+
         // 如果还款金额超过总债务，只还总债务 / If repay amount exceeds total debt, only repay total debt
         if (normalizedAmount > totalDebt) {
             normalizedAmount = totalDebt;
             amount = DeFiMath.denormalizeToUSDC(normalizedAmount);
         }
-        
+
         // 计算利息 / Calculate interest
         uint256 currentPrincipal = borrows[msg.sender];
         uint256 interest = totalDebt > currentPrincipal ? totalDebt - currentPrincipal : 0;
-        
+
         // 先还利息，再还本金 / Pay interest first, then principal
         uint256 principal = 0;
         if (normalizedAmount > interest) {
@@ -281,20 +283,20 @@ contract LendingPool is Ownable, ReentrancyGuard {
             interest = normalizedAmount;
             principal = 0;
         }
-        
+
         // 更新借款余额 / Update borrow balance
         if (principal > 0) {
             borrows[msg.sender] -= principal;
         }
-        
+
         // 如果本金已还清，重置时间戳 / If principal is cleared, reset timestamp
         if (borrows[msg.sender] == 0) {
             borrowTimestamps[msg.sender] = 0;
         }
-        
+
         // 转移 USD 到池子 / Transfer USD to pool
         IERC20(address(usdToken)).safeTransferFrom(msg.sender, address(this), amount);
-        
+
         emit Repaid(msg.sender, normalizedAmount, interest);
     }
 
@@ -306,11 +308,11 @@ contract LendingPool is Ownable, ReentrancyGuard {
     function getAccountHealthFactor(address user) public view returns (uint256 healthFactor) {
         uint256 totalCollateralValue = _calculateTotalCollateralValue(user);
         uint256 totalDebtValue = getTotalDebt(user);
-        
+
         if (totalDebtValue == 0) {
             return type(uint256).max; // 无债务，健康因子为最大值 / No debt, health factor is max
         }
-        
+
         // 健康因子 = 抵押品价值 / 债务价值 / Health factor = collateral value / debt value
         healthFactor = DeFiMath.div(totalCollateralValue, totalDebtValue);
     }
@@ -325,11 +327,11 @@ contract LendingPool is Ownable, ReentrancyGuard {
         if (principal == 0) {
             return 0;
         }
-        
+
         // 计算线性利息 / Calculate linear interest
         uint256 timeElapsed = block.timestamp - borrowTimestamps[user];
         uint256 interest = _calculateLinearInterest(principal, borrowRate, timeElapsed);
-        
+
         totalDebt = principal + interest;
     }
 
@@ -353,33 +355,33 @@ contract LendingPool is Ownable, ReentrancyGuard {
             emit CheckFailedLiquidationHealthFactor(user, healthFactor, liquidationThreshold);
             require(false, "LendingPool: health factor not low enough");
         }
-        
+
         uint256 totalDebt = getTotalDebt(user);
         uint256 collateralAmount = deposits[user][address(rwaToken)];
-        
+
         // 计算清算奖励 / Calculate liquidation bonus
         uint256 liquidationBonus = DeFiMath.mul(collateralAmount, liquidationBonusRate);
         uint256 collateralToLiquidator = collateralAmount + liquidationBonus;
-        
+
         // 检查合约余额是否足够支付清算奖励 / Check if contract balance is sufficient for liquidation bonus
         uint256 contractBalance = IERC20(address(rwaToken)).balanceOf(address(this));
         if (collateralToLiquidator > contractBalance) {
             // 如果余额不足，只给合约中有的部分 / If balance insufficient, only give what's available
             collateralToLiquidator = contractBalance;
         }
-        
+
         // 更新存款和借款余额 / Update deposit and borrow balances
         deposits[user][address(rwaToken)] = 0;
         borrows[user] = 0;
         borrowTimestamps[user] = 0;
-        
+
         // 销毁 aToken / Burn aToken
         address aTokenAddress = aTokens[address(rwaToken)];
         aToken(aTokenAddress).burn(user, collateralAmount);
-        
+
         // 转移抵押品和清算奖励给清算人 / Transfer collateral and liquidation bonus to liquidator
         IERC20(address(rwaToken)).safeTransfer(msg.sender, collateralToLiquidator);
-        
+
         emit Liquidated(user, msg.sender, collateralAmount, totalDebt, liquidationBonus);
     }
 
@@ -395,10 +397,10 @@ contract LendingPool is Ownable, ReentrancyGuard {
         if (depositAmount == 0) {
             return 0;
         }
-        
+
         // 获取 RWA 价格（已归一化到 18 位精度）/ Get RWA price (already normalized to 18 decimals)
-        (uint256 price, ) = oracle.getPrice(stockSymbol);
-        
+        (uint256 price,) = oracle.getPrice(stockSymbol);
+
         // 计算抵押品价值：数量 * 价格（都是 18 位精度，需要除以 1e18）/ Calculate collateral value: amount * price (both 18 decimals, need to divide by 1e18)
         totalValue = DeFiMath.mul(depositAmount, price);
     }
@@ -410,10 +412,10 @@ contract LendingPool is Ownable, ReentrancyGuard {
      */
     function _calculateMaxBorrow(address user) internal view returns (uint256 maxBorrow) {
         uint256 totalCollateralValue = _calculateTotalCollateralValue(user);
-        
+
         // 最大借款 = 抵押品价值 * LTV / Maximum borrow = collateral value * LTV
         maxBorrow = DeFiMath.mul(totalCollateralValue, ltv);
-        
+
         // 减去当前债务 / Subtract current debt
         uint256 currentDebt = getTotalDebt(user);
         if (maxBorrow > currentDebt) {
@@ -430,11 +432,11 @@ contract LendingPool is Ownable, ReentrancyGuard {
      * @param timeElapsed 经过的时间（秒）/ Time elapsed (seconds)
      * @return interest 利息（18位精度）/ Interest (18 decimals)
      */
-    function _calculateLinearInterest(
-        uint256 principal,
-        uint256 rate,
-        uint256 timeElapsed
-    ) internal pure returns (uint256 interest) {
+    function _calculateLinearInterest(uint256 principal, uint256 rate, uint256 timeElapsed)
+        internal
+        pure
+        returns (uint256 interest)
+    {
         // 线性利息公式：利息 = 本金 * 利率 * 时间 / 年秒数
         // Linear interest formula: interest = principal * rate * time / seconds per year
         // 所有值都是 18 位精度，所以需要除以 1e18 两次（一次是 rate，一次是结果）
@@ -451,26 +453,27 @@ contract LendingPool is Ownable, ReentrancyGuard {
      * @param withdrawAmount 提取数量（18位精度）/ Withdraw amount (18 decimals)
      * @return healthFactor 健康因子（18位精度）/ Health factor (18 decimals)
      */
-    function _calculateHealthFactorAfterWithdraw(
-        address user,
-        uint256 withdrawAmount
-    ) internal view returns (uint256 healthFactor) {
+    function _calculateHealthFactorAfterWithdraw(address user, uint256 withdrawAmount)
+        internal
+        view
+        returns (uint256 healthFactor)
+    {
         uint256 currentDeposit = deposits[user][address(rwaToken)];
         if (currentDeposit < withdrawAmount) {
             require(false, "LendingPool: insufficient deposit");
         }
-        
+
         // 计算提取后的抵押品价值 / Calculate collateral value after withdrawal
         uint256 newDeposit = currentDeposit - withdrawAmount;
-        (uint256 price, ) = oracle.getPrice(stockSymbol);
+        (uint256 price,) = oracle.getPrice(stockSymbol);
         uint256 newCollateralValue = DeFiMath.mul(newDeposit, price);
-        
+
         uint256 totalDebtValue = getTotalDebt(user);
-        
+
         if (totalDebtValue == 0) {
             return type(uint256).max;
         }
-        
+
         healthFactor = DeFiMath.div(newCollateralValue, totalDebtValue);
     }
 

@@ -16,7 +16,7 @@ contract StockOracle is Ownable {
 
     /// @notice Oracle 策略枚举 / Oracle strategy enum
     enum OracleStrategy {
-        PYTH,        // 使用 Pyth Network (Pull 模型) / Use Pyth Network (Pull model)
+        PYTH, // 使用 Pyth Network (Pull 模型) / Use Pyth Network (Pull model)
         CUSTOM_RELAYER // 使用自定义中继器 (Push 模型) / Use custom relayer (Push model)
     }
 
@@ -133,7 +133,7 @@ contract StockOracle is Ownable {
             emit CheckFailedPriceNotSet(symbol, price);
             revert InvalidPrice();
         }
-        
+
         // 保存原始价格（8位精度）/ Save raw price (8 decimals)
         stockPrices[symbol] = price;
         lastUpdatedAt[symbol] = block.timestamp;
@@ -151,7 +151,7 @@ contract StockOracle is Ownable {
             emit CheckFailedArraysLengthMismatch(symbols.length, prices.length);
             require(false, "StockOracle: arrays length mismatch");
         }
-        
+
         for (uint256 i = 0; i < symbols.length; i++) {
             if (prices[i] == 0) {
                 emit CheckFailedPriceNotSet(symbols[i], prices[i]);
@@ -171,19 +171,19 @@ contract StockOracle is Ownable {
      */
     function getPrice(string memory symbol) public view returns (uint256 normalizedPrice, uint256 timestamp) {
         uint256 rawPrice;
-        
+
         if (oracleStrategy == OracleStrategy.PYTH) {
             // 从 Pyth Network 拉取价格 / Pull price from Pyth Network
             bytes32 priceId = stockPriceIds[symbol];
             if (priceId == bytes32(0)) {
                 require(false, "StockOracle: price ID not set");
             }
-            
+
             (int64 pythPrice, uint256 publishTime) = pyth.getPrice(priceId);
             if (pythPrice <= 0) {
                 require(false, "StockOracle: invalid Pyth price");
             }
-            
+
             // Safe cast: Pyth prices are always positive for stocks / 安全转换：股票价格在 Pyth 中始终为正
             // forge-lint: disable-next-line(unsafe-typecast)
             rawPrice = uint256(uint64(pythPrice));
@@ -209,16 +209,16 @@ contract StockOracle is Ownable {
     function isPriceStale(string memory symbol) public view returns (bool isStale) {
         uint256 lastUpdate = lastUpdatedAt[symbol];
         if (lastUpdate == 0) return true; // 从未更新过 / Never updated
-        
+
         // 如果使用 Pyth，需要从 Pyth 获取时间戳 / If using Pyth, get timestamp from Pyth
         if (oracleStrategy == OracleStrategy.PYTH) {
             bytes32 priceId = stockPriceIds[symbol];
             if (priceId == bytes32(0)) return true;
-            
+
             (, uint256 publishTime) = pyth.getPrice(priceId);
             lastUpdate = publishTime;
         }
-        
+
         // 检查是否超过阈值 / Check if exceeds threshold
         isStale = (block.timestamp - lastUpdate) > stalePriceThreshold;
     }
@@ -230,14 +230,14 @@ contract StockOracle is Ownable {
      * @return timestamp 最后更新时间戳 / Last update timestamp
      * @return isStale 是否过期 / Whether price is stale
      */
-    function getPriceWithStaleCheck(string memory symbol) 
-        external 
-        view 
-        returns (uint256 normalizedPrice, uint256 timestamp, bool isStale) 
+    function getPriceWithStaleCheck(string memory symbol)
+        external
+        view
+        returns (uint256 normalizedPrice, uint256 timestamp, bool isStale)
     {
         (normalizedPrice, timestamp) = getPrice(symbol);
         isStale = isPriceStale(symbol);
-        
+
         // 如果启用断路器且价格过期，抛出错误 / If circuit breaker enabled and price stale, revert
         if (circuitBreakerEnabled && isStale) {
             revert PriceStale(symbol);
@@ -255,12 +255,7 @@ contract StockOracle is Ownable {
     function getPriceInfo(string memory symbol)
         external
         view
-        returns (
-            uint256 normalizedPrice,
-            uint256 timestamp,
-            bool isStale,
-            OracleStrategy strategy
-        )
+        returns (uint256 normalizedPrice, uint256 timestamp, bool isStale, OracleStrategy strategy)
     {
         (normalizedPrice, timestamp) = getPrice(symbol);
         isStale = isPriceStale(symbol);

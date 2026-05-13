@@ -12,7 +12,7 @@ import {IPyth} from "../interfaces/IPyth.sol";
 contract MockPyth is IPyth {
     /// @notice 价格 ID 到价格的映射 / Mapping from price ID to price
     mapping(bytes32 => int64) public prices;
-    
+
     /// @notice 价格 ID 到发布时间戳的映射 / Mapping from price ID to publish timestamp
     mapping(bytes32 => uint256) public publishTimes;
 

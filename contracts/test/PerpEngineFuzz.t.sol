@@ -25,73 +25,62 @@ contract PerpEngineFuzzTest is Test {
     StockOracle public oracle;
     MockPyth public mockPyth;
     aToken public aRWA;
-    
+
     address public owner;
     address public user;
-    
+
     string constant STOCK_SYMBOL = "NVDA";
     uint256 constant INITIAL_PRICE = 150 * 1e8; // $150 with 8 decimals
 
     function setUp() public {
         owner = address(0x1);
         user = address(0x2);
-        
+
         // 部署 Mock Pyth
         mockPyth = new MockPyth();
-        
+
         // 部署 StockOracle
         vm.prank(owner);
         oracle = new StockOracle(address(mockPyth), owner);
-        
+
         // 设置初始价格
         vm.prank(owner);
         oracle.updatePrice(STOCK_SYMBOL, INITIAL_PRICE);
-        
+
         // 部署 RWA 代币
         vm.prank(owner);
         rwaToken = new USStockRWA("NVIDIA RWA", "NVDA", owner);
-        
+
         // 部署 USD 代币
         vm.prank(owner);
         usdToken = new MockUSD(owner);
-        
+
         // 部署 LendingPool
         vm.prank(owner);
-        lendingPool = new LendingPool(
-            address(rwaToken),
-            address(usdToken),
-            address(oracle),
-            STOCK_SYMBOL,
-            owner
-        );
-        
+        lendingPool = new LendingPool(address(rwaToken), address(usdToken), address(oracle), STOCK_SYMBOL, owner);
+
         // 获取 aToken 地址
         address aTokenAddress = lendingPool.aTokens(address(rwaToken));
         aRWA = aToken(aTokenAddress);
-        
+
         // 部署 PerpEngine
         vm.prank(owner);
-        perpEngine = new PerpEngine(
-            address(oracle),
-            STOCK_SYMBOL,
-            address(aRWA),
-            owner
-        );
-        
+        perpEngine = new PerpEngine(address(oracle), STOCK_SYMBOL, address(aRWA), owner);
+
         // 给用户铸造大量 RWA 和 USD（用于 fuzz 测试）
         vm.prank(owner);
         rwaToken.mint(user, type(uint256).max / 2);
-        
+
         vm.prank(owner);
         usdToken.mint(user, type(uint256).max / 2);
-        
+
         // 用户授权
         vm.prank(user);
         rwaToken.approve(address(lendingPool), type(uint256).max);
-        
+
         vm.prank(user);
         usdToken.approve(address(lendingPool), type(uint256).max);
-        
+
         // 给 LendingPool 铸造 USD（用于借出）
         vm.prank(owner);
         usdToken.mint(address(lendingPool), type(uint256).max / 2);
@@ -101,49 +90,45 @@ contract PerpEngineFuzzTest is Test {
     /// @param depositAmount 存款数量（18位精度）/ Deposit amount (18 decimals)
     /// @param positionSize 仓位大小（18位精度）/ Position size (18 decimals)
     /// @param isLong 是否做多 / Whether long
-    function testFuzz_OpenAndClosePosition(
-        uint256 depositAmount,
-        uint256 positionSize,
-        bool isLong
-    ) public {
+    function testFuzz_OpenAndClosePosition(uint256 depositAmount, uint256 positionSize, bool isLong) public {
         // 限制金额范围 / Limit amount range
         depositAmount = bound(depositAmount, 1000 * 1e18, 1000000 * 1e18);
         positionSize = bound(positionSize, 100 * 1e18, 100000 * 1e18);
-        
+
         // 确保用户有足够的代币 / Ensure user has enough tokens
         uint256 userBalance = rwaToken.balanceOf(user);
         if (depositAmount > userBalance) {
             vm.prank(owner);
             rwaToken.mint(user, depositAmount - userBalance);
         }
-        
+
         // 存款到 LendingPool
         vm.prank(user);
         lendingPool.depositRWA(depositAmount);
-        
+
         // 授权 PerpEngine
         vm.prank(user);
         aRWA.approve(address(perpEngine), type(uint256).max);
-        
+
         // 计算所需保证金（至少 10% 初始保证金率）/ Calculate required collateral (at least 10% initial margin rate)
         uint256 requiredCollateral = DeFiMath.mul(positionSize, perpEngine.initialMarginRate());
-        
+
         // 如果所需保证金超过存款或为 0，跳过测试 / If required collateral exceeds deposit or is 0, skip test
         if (requiredCollateral == 0 || requiredCollateral > depositAmount) {
             return;
         }
-        
+
         uint256 collateral = bound(requiredCollateral, requiredCollateral, depositAmount);
-        
+
         // 开仓
         PerpEngine.PositionSide side = isLong ? PerpEngine.PositionSide.LONG : PerpEngine.PositionSide.SHORT;
         vm.prank(user);
         perpEngine.openPosition(side, positionSize, collateral);
-        
+
         // 平仓
         vm.prank(user);
         perpEngine.closePosition(0); // 全部平仓
-        
+
         // 检查仓位已清除
         (,, uint256 size,,,) = perpEngine.positions(user);
         assertEq(size, 0, "Position should be closed");
@@ -165,36 +150,36 @@ contract PerpEngineFuzzTest is Test {
         positionSize = bound(positionSize, 100 * 1e18, 100000 * 1e18);
         addAmount = bound(addAmount, 1 * 1e18, 10000 * 1e18);
         withdrawAmount = bound(withdrawAmount, 1 * 1e18, 10000 * 1e18);
-        
+
         // 确保用户有足够的代币 / Ensure user has enough tokens
         uint256 userBalance = rwaToken.balanceOf(user);
         if (depositAmount > userBalance) {
             vm.prank(owner);
             rwaToken.mint(user, depositAmount - userBalance);
         }
-        
+
         // 存款到 LendingPool
         vm.prank(user);
         lendingPool.depositRWA(depositAmount);
-        
+
         // 授权 PerpEngine
         vm.prank(user);
         aRWA.approve(address(perpEngine), type(uint256).max);
-        
+
         // 计算所需保证金 / Calculate required collateral
         uint256 requiredCollateral = DeFiMath.mul(positionSize, perpEngine.initialMarginRate());
-        
+
         // 如果所需保证金超过存款或为 0，跳过测试 / If required collateral exceeds deposit or is 0, skip test
         if (requiredCollateral > depositAmount || requiredCollateral == 0) {
             return;
         }
-        
+
         uint256 initialCollateral = bound(requiredCollateral, requiredCollateral, depositAmount);
-        
+
         // 开仓
         vm.prank(user);
         perpEngine.openPosition(PerpEngine.PositionSide.LONG, positionSize, initialCollateral);
-        
+
         // 确保有足够的 aToken 用于追加 / Ensure enough aToken for adding
         uint256 aTokenBalance = aRWA.balanceOf(user);
         if (addAmount > aTokenBalance) {
@@ -207,22 +192,21 @@ contract PerpEngineFuzzTest is Test {
                 addAmount = aTokenBalance;
             }
         }
-        
+
         // 追加保证金
         if (addAmount > 0 && addAmount <= aRWA.balanceOf(user)) {
             vm.prank(user);
             perpEngine.addCollateral(addAmount);
         }
-        
+
         // 获取当前保证金 / Get current collateral
         (,,, uint256 currentCollateral,,) = perpEngine.positions(user);
-        
+
         // 计算维持保证金要求 / Calculate maintenance margin requirement
         uint256 requiredMaintenanceMargin = DeFiMath.mul(positionSize, perpEngine.maintenanceMarginRate());
-        
+
         // 如果提取后仍满足维持保证金率，则提取 / If withdrawal still satisfies maintenance margin, withdraw
-        if (currentCollateral > withdrawAmount && 
-            (currentCollateral - withdrawAmount) >= requiredMaintenanceMargin) {
+        if (currentCollateral > withdrawAmount && (currentCollateral - withdrawAmount) >= requiredMaintenanceMargin) {
             vm.prank(user);
             perpEngine.withdrawCollateral(withdrawAmount);
         }
@@ -233,12 +217,9 @@ contract PerpEngineFuzzTest is Test {
     /// @param positionSize 仓位大小（18位精度）/ Position size (18 decimals)
     /// @param newPrice 新价格（8位精度）/ New price (8 decimals)
     /// @param isLong 是否做多 / Whether long
-    function testFuzz_PriceChangeImpact(
-        uint256 depositAmount,
-        uint256 positionSize,
-        uint256 newPrice,
-        bool isLong
-    ) public {
+    function testFuzz_PriceChangeImpact(uint256 depositAmount, uint256 positionSize, uint256 newPrice, bool isLong)
+        public
+    {
         // 限制金额范围 / Limit amount range
         depositAmount = bound(depositAmount, 1000 * 1e18, 1000000 * 1e18);
         positionSize = bound(positionSize, 100 * 1e18, 100000 * 1e18);
@@ -247,61 +228,61 @@ contract PerpEngineFuzzTest is Test {
         uint256 minPrice = INITIAL_PRICE / 10;
         uint256 maxPrice = INITIAL_PRICE * 10;
         newPrice = bound(newPrice, minPrice, maxPrice);
-        
+
         // 确保用户有足够的代币 / Ensure user has enough tokens
         uint256 userBalance = rwaToken.balanceOf(user);
         if (depositAmount > userBalance) {
             vm.prank(owner);
             rwaToken.mint(user, depositAmount - userBalance);
         }
-        
+
         // 存款到 LendingPool
         vm.prank(user);
         lendingPool.depositRWA(depositAmount);
-        
+
         // 授权 PerpEngine
         vm.prank(user);
         aRWA.approve(address(perpEngine), type(uint256).max);
-        
+
         // 计算所需保证金 / Calculate required collateral
         uint256 requiredCollateral = DeFiMath.mul(positionSize, perpEngine.initialMarginRate());
-        
+
         // 如果所需保证金超过存款或为 0，跳过测试 / If required collateral exceeds deposit or is 0, skip test
         if (requiredCollateral > depositAmount || requiredCollateral == 0) {
             return;
         }
-        
+
         uint256 collateral = bound(requiredCollateral, requiredCollateral, depositAmount);
-        
+
         // 开仓
         PerpEngine.PositionSide side = isLong ? PerpEngine.PositionSide.LONG : PerpEngine.PositionSide.SHORT;
         vm.prank(user);
         perpEngine.openPosition(side, positionSize, collateral);
-        
+
         // 获取开仓价格 / Get entry price
         (,, uint256 entryPrice,,,) = perpEngine.positions(user);
-        
+
         // 更新价格
         vm.prank(owner);
         oracle.updatePrice(STOCK_SYMBOL, newPrice);
-        
+
         // 获取 PnL
         (int256 pnl, uint256 fundingFee) = perpEngine.getPositionPnL(user);
-        
+
         // 验证 PnL 计算 / Verify PnL calculation
         uint256 normalizedNewPrice = DeFiMath.normalizeOraclePrice(newPrice);
-        
+
         // 如果价格变化很小（< 1%），可能由于精度问题导致 PnL 计算不准确，跳过验证
         // If price change is very small (< 1%), PnL calculation may be inaccurate due to precision, skip verification
-        uint256 priceChangePercent = normalizedNewPrice > entryPrice 
+        uint256 priceChangePercent = normalizedNewPrice > entryPrice
             ? ((normalizedNewPrice - entryPrice) * 100) / entryPrice
             : ((entryPrice - normalizedNewPrice) * 100) / entryPrice;
-        
+
         if (priceChangePercent < 1) {
             // 价格变化太小，跳过验证 / Price change too small, skip verification
             return;
         }
-        
+
         if (isLong) {
             // 做多：价格上涨盈利，价格下跌亏损 / Long: profit when price rises, loss when price falls
             if (normalizedNewPrice > entryPrice) {
@@ -325,7 +306,9 @@ contract PerpEngineFuzzTest is Test {
                     assertLe(pnl, int256(1e12), "Short PnL should be <= 0 when price change is small");
                 } else {
                     // 价格变化足够大（>= 50%），应盈利（允许资金费率/精度导致小幅负值）
-                    assertGt(pnl, -int256(fundingFee) - int256(1e15), "Short should profit when price falls significantly");
+                    assertGt(
+                        pnl, -int256(fundingFee) - int256(1e15), "Short should profit when price falls significantly"
+                    );
                 }
             } else if (normalizedNewPrice > entryPrice) {
                 // 价格上涨，应该亏损
@@ -338,45 +321,41 @@ contract PerpEngineFuzzTest is Test {
     /// @param depositAmount 存款数量（18位精度）/ Deposit amount (18 decimals)
     /// @param positionSize 仓位大小（18位精度）/ Position size (18 decimals)
     /// @param priceChange 价格变化百分比（-100 到 100）/ Price change percentage (-100 to 100)
-    function testFuzz_HealthFactor(
-        uint256 depositAmount,
-        uint256 positionSize,
-        int256 priceChange
-    ) public {
+    function testFuzz_HealthFactor(uint256 depositAmount, uint256 positionSize, int256 priceChange) public {
         // 限制金额范围 / Limit amount range
         depositAmount = bound(depositAmount, 1000 * 1e18, 1000000 * 1e18);
         positionSize = bound(positionSize, 100 * 1e18, 100000 * 1e18);
         priceChange = bound(priceChange, -50, 50); // -50% to +50%
-        
+
         // 确保用户有足够的代币 / Ensure user has enough tokens
         uint256 userBalance = rwaToken.balanceOf(user);
         if (depositAmount > userBalance) {
             vm.prank(owner);
             rwaToken.mint(user, depositAmount - userBalance);
         }
-        
+
         // 存款到 LendingPool
         vm.prank(user);
         lendingPool.depositRWA(depositAmount);
-        
+
         // 授权 PerpEngine
         vm.prank(user);
         aRWA.approve(address(perpEngine), type(uint256).max);
-        
+
         // 计算所需保证金 / Calculate required collateral
         uint256 requiredCollateral = DeFiMath.mul(positionSize, perpEngine.initialMarginRate());
-        
+
         // 如果所需保证金超过存款或为 0，跳过测试 / If required collateral exceeds deposit or is 0, skip test
         if (requiredCollateral == 0 || requiredCollateral > depositAmount) {
             return;
         }
-        
+
         uint256 collateral = bound(requiredCollateral, requiredCollateral, depositAmount);
-        
+
         // 开仓做多
         vm.prank(user);
         perpEngine.openPosition(PerpEngine.PositionSide.LONG, positionSize, collateral);
-        
+
         // 计算新价格 / Calculate new price
         uint256 newPrice;
         if (priceChange >= 0) {
@@ -391,14 +370,14 @@ contract PerpEngineFuzzTest is Test {
             newPrice = INITIAL_PRICE > decrease ? INITIAL_PRICE - decrease : 1 * 1e8;
         }
         newPrice = bound(newPrice, 1 * 1e8, 10000 * 1e8);
-        
+
         // 更新价格
         vm.prank(owner);
         oracle.updatePrice(STOCK_SYMBOL, newPrice);
-        
+
         // 获取健康因子
         uint256 healthFactor = perpEngine.getPositionHealthFactor(user);
-        
+
         // 健康因子应该 >= 0 / Health factor should >= 0
         assertGe(healthFactor, 0, "Health factor should be >= 0");
     }
@@ -407,57 +386,53 @@ contract PerpEngineFuzzTest is Test {
     /// @param depositAmount 存款数量（18位精度）/ Deposit amount (18 decimals)
     /// @param positionSize 仓位大小（18位精度）/ Position size (18 decimals)
     /// @param closeRatio 平仓比例（0-100，表示百分比）/ Close ratio (0-100, percentage)
-    function testFuzz_PartialClose(
-        uint256 depositAmount,
-        uint256 positionSize,
-        uint256 closeRatio
-    ) public {
+    function testFuzz_PartialClose(uint256 depositAmount, uint256 positionSize, uint256 closeRatio) public {
         // 限制金额范围 / Limit amount range
         depositAmount = bound(depositAmount, 1000 * 1e18, 1000000 * 1e18);
         positionSize = bound(positionSize, 100 * 1e18, 100000 * 1e18);
         closeRatio = bound(closeRatio, 1, 99); // 1% to 99%
-        
+
         // 确保用户有足够的代币 / Ensure user has enough tokens
         uint256 userBalance = rwaToken.balanceOf(user);
         if (depositAmount > userBalance) {
             vm.prank(owner);
             rwaToken.mint(user, depositAmount - userBalance);
         }
-        
+
         // 存款到 LendingPool
         vm.prank(user);
         lendingPool.depositRWA(depositAmount);
-        
+
         // 授权 PerpEngine
         vm.prank(user);
         aRWA.approve(address(perpEngine), type(uint256).max);
-        
+
         // 计算所需保证金 / Calculate required collateral
         uint256 requiredCollateral = DeFiMath.mul(positionSize, perpEngine.initialMarginRate());
-        
+
         // 确保所需保证金不超过存款金额 / Ensure required collateral doesn't exceed deposit
         if (requiredCollateral > depositAmount || requiredCollateral == 0) {
             return;
         }
-        
+
         uint256 collateral = bound(requiredCollateral, requiredCollateral, depositAmount);
-        
+
         // 开仓
         vm.prank(user);
         perpEngine.openPosition(PerpEngine.PositionSide.LONG, positionSize, collateral);
-        
+
         // 计算平仓数量 / Calculate close size
         uint256 closeSize = DeFiMath.mul(positionSize, closeRatio) / 100;
-        
+
         // 确保平仓数量不超过仓位大小 / Ensure close size doesn't exceed position size
         if (closeSize > positionSize || closeSize == 0) {
             return;
         }
-        
+
         // 部分平仓
         vm.prank(user);
         perpEngine.closePosition(closeSize);
-        
+
         // 检查仓位大小减少（允许小的精度误差）/ Check position size decreased (allow small precision error)
         (,, uint256 remainingSize,,,) = perpEngine.positions(user);
         uint256 expectedSize = positionSize - closeSize;
@@ -475,48 +450,43 @@ contract PerpEngineFuzzTest is Test {
     /// @param positionSize 仓位大小（18位精度）/ Position size (18 decimals)
     /// @param priceChange 价格变化百分比（-100 到 -10，表示大幅下跌）/ Price change percentage (-100 to -10, large drop)
     /// @param isLong 是否做多 / Whether long
-    function testFuzz_Liquidation(
-        uint256 depositAmount,
-        uint256 positionSize,
-        int256 priceChange,
-        bool isLong
-    ) public {
+    function testFuzz_Liquidation(uint256 depositAmount, uint256 positionSize, int256 priceChange, bool isLong) public {
         // 限制金额范围 / Limit amount range
         depositAmount = bound(depositAmount, 1000 * 1e18, 1000000 * 1e18);
         positionSize = bound(positionSize, 100 * 1e18, 100000 * 1e18);
         // 价格大幅下跌（做多）或大幅上涨（做空），导致清算 / Large price drop (long) or surge (short) causing liquidation
         priceChange = bound(priceChange, -90, -10); // -90% to -10% for long, will be inverted for short
-        
+
         // 确保用户有足够的代币 / Ensure user has enough tokens
         uint256 userBalance = rwaToken.balanceOf(user);
         if (depositAmount > userBalance) {
             vm.prank(owner);
             rwaToken.mint(user, depositAmount - userBalance);
         }
-        
+
         // 存款到 LendingPool
         vm.prank(user);
         lendingPool.depositRWA(depositAmount);
-        
+
         // 授权 PerpEngine
         vm.prank(user);
         aRWA.approve(address(perpEngine), type(uint256).max);
-        
+
         // 计算所需保证金 / Calculate required collateral
         uint256 requiredCollateral = DeFiMath.mul(positionSize, perpEngine.initialMarginRate());
-        
+
         // 如果所需保证金超过存款或为 0，跳过测试 / If required collateral exceeds deposit or is 0, skip test
         if (requiredCollateral > depositAmount || requiredCollateral == 0) {
             return;
         }
-        
+
         uint256 collateral = bound(requiredCollateral, requiredCollateral, depositAmount);
-        
+
         // 开仓
         PerpEngine.PositionSide side = isLong ? PerpEngine.PositionSide.LONG : PerpEngine.PositionSide.SHORT;
         vm.prank(user);
         perpEngine.openPosition(side, positionSize, collateral);
-        
+
         // 计算新价格（根据方向调整）/ Calculate new price (adjust based on direction)
         uint256 newPrice;
         if (isLong) {
@@ -533,28 +503,28 @@ contract PerpEngineFuzzTest is Test {
             }
         }
         newPrice = bound(newPrice, 1 * 1e8, 10000 * 1e8);
-        
+
         // 更新价格
         vm.prank(owner);
         oracle.updatePrice(STOCK_SYMBOL, newPrice);
-        
+
         // 检查健康因子 / Check health factor
         uint256 healthFactor = perpEngine.getPositionHealthFactor(user);
-        
+
         // 如果健康因子过低，可以清算 / If health factor is too low, can liquidate
         if (healthFactor < 1e18) {
             // 记录清算人余额 / Record liquidator balance
             address liquidator = address(0x999);
             uint256 liquidatorBalanceBefore = aRWA.balanceOf(liquidator);
-            
+
             // 清算 / Liquidate
             vm.prank(liquidator);
             perpEngine.liquidatePosition(user);
-            
+
             // 检查仓位已清除 / Check position is cleared
             (, uint256 size,,,,) = perpEngine.positions(user);
             assertEq(size, 0, "Position should be cleared after liquidation");
-            
+
             // 检查清算人获得奖励（如果有剩余保证金）/ Check liquidator receives bonus (if there's remaining collateral)
             uint256 liquidatorBalanceAfter = aRWA.balanceOf(liquidator);
             // 清算人应该获得一些奖励（可能为 0 如果亏损太大）/ Liquidator should get some bonus (may be 0 if loss is too large)
@@ -566,46 +536,44 @@ contract PerpEngineFuzzTest is Test {
     /// @param depositAmount 存款数量（18位精度）/ Deposit amount (18 decimals)
     /// @param positionSize 仓位大小（18位精度）/ Position size (18 decimals)
     /// @param priceChange 价格变化百分比（-100 到 100）/ Price change percentage (-100 to 100)
-    function testFuzz_HealthFactorAndLiquidation(
-        uint256 depositAmount,
-        uint256 positionSize,
-        int256 priceChange
-    ) public {
+    function testFuzz_HealthFactorAndLiquidation(uint256 depositAmount, uint256 positionSize, int256 priceChange)
+        public
+    {
         // 限制金额范围 / Limit amount range
         depositAmount = bound(depositAmount, 1000 * 1e18, 1000000 * 1e18);
         positionSize = bound(positionSize, 100 * 1e18, 100000 * 1e18);
         // 限制价格变化范围，避免极端值导致计算问题 / Limit price change range to avoid calculation issues
         priceChange = bound(priceChange, -70, 70); // -70% to +70%
-        
+
         // 确保用户有足够的代币 / Ensure user has enough tokens
         uint256 userBalance = rwaToken.balanceOf(user);
         if (depositAmount > userBalance) {
             vm.prank(owner);
             rwaToken.mint(user, depositAmount - userBalance);
         }
-        
+
         // 存款到 LendingPool
         vm.prank(user);
         lendingPool.depositRWA(depositAmount);
-        
+
         // 授权 PerpEngine
         vm.prank(user);
         aRWA.approve(address(perpEngine), type(uint256).max);
-        
+
         // 计算所需保证金 / Calculate required collateral
         uint256 requiredCollateral = DeFiMath.mul(positionSize, perpEngine.initialMarginRate());
-        
+
         // 如果所需保证金超过存款或为 0，跳过测试 / If required collateral exceeds deposit or is 0, skip test
         if (requiredCollateral > depositAmount || requiredCollateral == 0) {
             return;
         }
-        
+
         uint256 collateral = bound(requiredCollateral, requiredCollateral, depositAmount);
-        
+
         // 开仓做多
         vm.prank(user);
         perpEngine.openPosition(PerpEngine.PositionSide.LONG, positionSize, collateral);
-        
+
         // 计算新价格 / Calculate new price
         uint256 newPrice;
         if (priceChange >= 0) {
@@ -620,21 +588,21 @@ contract PerpEngineFuzzTest is Test {
             newPrice = INITIAL_PRICE > decrease ? INITIAL_PRICE - decrease : 1 * 1e8;
         }
         newPrice = bound(newPrice, 1 * 1e8, 10000 * 1e8);
-        
+
         // 更新价格
         vm.prank(owner);
         oracle.updatePrice(STOCK_SYMBOL, newPrice);
-        
+
         // 获取健康因子
         uint256 healthFactor = perpEngine.getPositionHealthFactor(user);
-        
+
         // 验证：如果健康因子 < 1.0，应该可以清算 / Verify: if health factor < 1.0, should be liquidatable
         if (healthFactor < 1e18) {
             // 应该可以清算 / Should be liquidatable
             address liquidator = address(0x888);
             vm.prank(liquidator);
             perpEngine.liquidatePosition(user);
-            
+
             // 检查仓位已清除 / Check position is cleared
             (,, uint256 size,,,) = perpEngine.positions(user);
             assertEq(size, 0, "Position should be cleared");

@@ -44,22 +44,11 @@ contract DeployScriptTest is Test {
         // 4. MockUSD
         usdToken = new MockUSD(deployer);
         // 5. LendingPool
-        lendingPool = new LendingPool(
-            address(rwaToken),
-            address(usdToken),
-            address(oracle),
-            STOCK_SYMBOL,
-            deployer
-        );
+        lendingPool = new LendingPool(address(rwaToken), address(usdToken), address(oracle), STOCK_SYMBOL, deployer);
         address aTokenAddress = lendingPool.aTokens(address(rwaToken));
         aRWA = aToken(aTokenAddress);
         // 6. PerpEngine
-        perpEngine = new PerpEngine(
-            address(oracle),
-            STOCK_SYMBOL,
-            address(aRWA),
-            deployer
-        );
+        perpEngine = new PerpEngine(address(oracle), STOCK_SYMBOL, address(aRWA), deployer);
         // 7. Mint USD to LendingPool
         usdToken.mint(address(lendingPool), MINT_USD_TO_POOL);
 

@@ -9,7 +9,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  * @author AnchorStock
  * @notice 美股 RWA（Real World Asset）代币，代表美股资产 / US Stock RWA token representing stock assets
  * @dev 使用 ERC20 标准，18 位精度 / Uses ERC20 standard with 18 decimals
- * 
+ *
  * 示例：$NVDA, $AAPL 等美股代币化资产 / Examples: $NVDA, $AAPL tokenized stock assets
  */
 contract USStockRWA is ERC20, Ownable {
@@ -33,11 +33,7 @@ contract USStockRWA is ERC20, Ownable {
      * @param _symbol 代币符号（如 "NVDA"）/ Token symbol (e.g., "NVDA")
      * @param _owner 合约所有者 / Contract owner
      */
-    constructor(
-        string memory _name,
-        string memory _symbol,
-        address _owner
-    ) ERC20(_name, _symbol) Ownable(_owner) {
+    constructor(string memory _name, string memory _symbol, address _owner) ERC20(_name, _symbol) Ownable(_owner) {
         stockSymbol = _symbol;
     }
 
@@ -65,7 +61,7 @@ contract USStockRWA is ERC20, Ownable {
             emit CheckFailedArraysLengthMismatch(recipients.length, amounts.length);
             require(false, "USStockRWA: arrays length mismatch");
         }
-        
+
         for (uint256 i = 0; i < recipients.length; i++) {
             if (recipients[i] == address(0)) {
                 emit CheckFailedZeroAddress("batchMint", recipients[i]);

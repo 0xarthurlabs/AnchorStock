@@ -6,25 +6,25 @@ pragma solidity ^0.8.20;
  * @author AnchorStock
  * @notice 精度归一化工具库 / Precision Normalization Utility Library
  * @dev 将所有不同精度的数值归一化到 1e18 基准 / Normalize all values with different decimals to 1e18 base
- * 
+ *
  * 支持的精度类型 / Supported Decimal Types:
  * - USDC: 6 decimals
  * - RWA: 18 decimals
  * - Oracle Price: 8 decimals
- * 
+ *
  * 归一化公式 / Normalization Formula:
  * normalized_value = raw_value * 10^(18 - decimals)
  */
 library DeFiMath {
     /// @dev 精度基准常量 / Precision base constant (1e18)
     uint256 public constant PRECISION_BASE = 1e18;
-    
+
     /// @dev USDC 精度 / USDC decimals
     uint8 public constant USDC_DECIMALS = 6;
-    
+
     /// @dev Oracle 价格精度 / Oracle price decimals
     uint8 public constant ORACLE_DECIMALS = 8;
-    
+
     /// @dev RWA 精度 / RWA decimals (already 18, no conversion needed)
     uint8 public constant RWA_DECIMALS = 18;
 
@@ -38,12 +38,12 @@ library DeFiMath {
         if (decimals == 18) {
             return value; // Already normalized / 已经是 18 位精度
         }
-        
+
         if (decimals > 18) {
             // 如果精度大于 18，需要向下缩放 / If decimals > 18, scale down
             revert("DeFiMath: decimals cannot exceed 18");
         }
-        
+
         // 计算缩放因子 / Calculate scaling factor: 10^(18 - decimals)
         uint256 scaleFactor = 10 ** (18 - decimals);
         normalized = value * scaleFactor;
@@ -86,11 +86,11 @@ library DeFiMath {
         if (targetDecimals == 18) {
             return normalized; // Already in target format / 已经是目标精度
         }
-        
+
         if (targetDecimals > 18) {
             revert("DeFiMath: target decimals cannot exceed 18");
         }
-        
+
         // 计算缩放因子 / Calculate scaling factor: 10^(18 - targetDecimals)
         uint256 scaleFactor = 10 ** (18 - targetDecimals);
         denormalized = normalized / scaleFactor;

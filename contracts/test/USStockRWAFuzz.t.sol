@@ -16,7 +16,7 @@ contract USStockRWAFuzzTest is Test {
     function setUp() public {
         owner = address(0x1);
         user = address(0x2);
-        
+
         vm.prank(owner);
         rwaToken = new USStockRWA("NVIDIA RWA", "NVDA", owner);
     }
@@ -26,18 +26,18 @@ contract USStockRWAFuzzTest is Test {
     function testFuzz_MintAndTransfer(uint256 amount) public {
         // 限制金额范围，避免溢出 / Limit amount range to avoid overflow
         amount = bound(amount, 1, type(uint256).max / 2);
-        
+
         vm.prank(owner);
         rwaToken.mint(user, amount);
-        
+
         assertEq(rwaToken.balanceOf(user), amount);
         assertEq(rwaToken.totalSupply(), amount);
-        
+
         // 转账
         address recipient = address(0x3);
         vm.prank(user);
         rwaToken.transfer(recipient, amount);
-        
+
         assertEq(rwaToken.balanceOf(user), 0);
         assertEq(rwaToken.balanceOf(recipient), amount);
     }
@@ -47,22 +47,22 @@ contract USStockRWAFuzzTest is Test {
     function testFuzz_BatchMint(uint8 count) public {
         // 限制数组大小 / Limit array size
         count = uint8(bound(uint256(count), 1, 10));
-        
+
         address[] memory recipients = new address[](count);
         uint256[] memory amounts = new uint256[](count);
         uint256 totalAmount = 0;
-        
+
         for (uint8 i = 0; i < count; i++) {
             recipients[i] = address(uint160(i + 100));
             amounts[i] = bound(uint256(keccak256(abi.encodePacked(i))), 1, 1000000 * 1e18);
             totalAmount += amounts[i];
         }
-        
+
         vm.prank(owner);
         rwaToken.batchMint(recipients, amounts);
-        
+
         assertEq(rwaToken.totalSupply(), totalAmount);
-        
+
         for (uint8 i = 0; i < count; i++) {
             assertEq(rwaToken.balanceOf(recipients[i]), amounts[i]);
         }
@@ -72,13 +72,13 @@ contract USStockRWAFuzzTest is Test {
     /// @param amount 数量（18位精度）/ Amount (18 decimals)
     function testFuzz_MintAndBurn(uint256 amount) public {
         amount = bound(amount, 1, type(uint256).max / 2);
-        
+
         vm.prank(owner);
         rwaToken.mint(user, amount);
-        
+
         vm.prank(user);
         rwaToken.burn(amount);
-        
+
         assertEq(rwaToken.balanceOf(user), 0);
         assertEq(rwaToken.totalSupply(), 0);
     }
