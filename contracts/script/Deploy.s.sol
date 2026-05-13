@@ -74,17 +74,17 @@ contract DeployScript is Script {
         // 读取私钥，支持带或不带 0x 前缀 / Read private key, support with or without 0x prefix
         string memory privateKeyStr = vm.envString("PRIVATE_KEY");
         uint256 deployerPrivateKey;
-        
+
         // 检查是否有 0x 前缀 / Check if has 0x prefix
         bytes memory privateKeyBytes = bytes(privateKeyStr);
-        if (privateKeyBytes.length >= 2 && privateKeyBytes[0] == '0' && privateKeyBytes[1] == 'x') {
+        if (privateKeyBytes.length >= 2 && privateKeyBytes[0] == bytes1("0") && privateKeyBytes[1] == bytes1("x")) {
             deployerPrivateKey = vm.parseUint(privateKeyStr);
         } else {
             // 如果没有 0x 前缀，添加它 / If no 0x prefix, add it
             string memory prefixedKey = string.concat("0x", privateKeyStr);
             deployerPrivateKey = vm.parseUint(prefixedKey);
         }
-        
+
         address deployer = vm.addr(deployerPrivateKey);
 
         // 非本地链时禁止使用 Anvil 默认私钥，避免误用（本地 anvil 链 id 31337 允许默认账户方便测试）
@@ -96,8 +96,7 @@ contract DeployScript is Script {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        console.log("Deploying contracts...");
-        console.log("Deployer address:", deployer);
+        console.log("Deploying contracts...", deployer);
 
         // 1. 部署 MockPyth（用于测试，生产环境应使用真实的 Pyth 合约）/ Deploy MockPyth (for testing, use real Pyth contract in production)
         console.log("\n1. Deploying MockPyth...");
