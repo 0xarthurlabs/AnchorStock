@@ -8,6 +8,9 @@ fs_permissions = [{ access = "read-write", path = "./deployments" }]
 # 不要在 [profile.default] 设置 eth_rpc_url：否则 forge test 会走链上后端，CI 无 fork 块会报 Unknown block number。
 # 脚本请使用：forge script ... --rpc-url <URL> 或环境变量；本文件 [rpc_endpoints] 仅作命名端点。
 no_storage_caching = true
+# Align with CI / DeploymentArtifact defaults so bytecode matches forge verify
+optimizer = true
+optimizer_runs = 200
 # RPC 超时请用命令行传入：forge script ... --timeout 300
 remappings = [
     "@openzeppelin/=lib/openzeppelin-contracts/",
@@ -31,6 +34,11 @@ seed = "0x4e4f524d414c0000000000000000000000000000000000000000000000000000"
 include_storage = true
 # 是否包含推送字节码 / Whether to include push bytecode
 include_push_bytes = true
+
+# Block explorer verification: set ETHERSCAN_API_KEY in env; use forge script ... --broadcast --verify
+[etherscan]
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
+mainnet = { key = "${ETHERSCAN_API_KEY}" }
 
 # RPC 配置 / RPC Configuration（不在仓库写密钥；见 contracts/.env.example 的 RPC_URL）
 [rpc_endpoints]

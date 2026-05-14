@@ -4,6 +4,10 @@
 #   Secrets (required): TESTNET_DEPLOYER_PRIVATE_KEY, TESTNET_RPC_URL
 #   Secrets (optional): DEPLOYMENTS_WRITE_TOKEN — fine-grained PAT, contents:write, when branch protection
 #     blocks pushes from GITHUB_TOKEN
+#   Secrets (optional): ETHERSCAN_API_KEY — Etherscan API key; when set and chain_id is 1 or 11155111,
+#     deploy adds --verify (source verified on Etherscan after broadcast).
+#   Variables (optional): CONTRACTS_BLOCKSCOUT_URL — Blockscout API base URL (e.g. https://explorer.example/api);
+#     when Etherscan verify is not used and this is set, deploy uses --verifier blockscout (e.g. Sei testnet).
 #   Variables (optional): TESTNET_EXPLORER_ADDRESS_PREFIX — passed to Deploy script as EXPLORER_BASE
 #
 # Configure: Repo → Settings → Environments → create/select name (e.g. staging or contract-testnet) →
@@ -80,6 +84,8 @@ jobs:
           PRIVATE_KEY: ${{ secrets.TESTNET_DEPLOYER_PRIVATE_KEY }}
           ETH_RPC_URL: ${{ secrets.TESTNET_RPC_URL }}
           EXPLORER_BASE: ${{ vars.TESTNET_EXPLORER_ADDRESS_PREFIX }}
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+          CONTRACTS_BLOCKSCOUT_URL: ${{ vars.CONTRACTS_BLOCKSCOUT_URL }}
         run: |
           set -euo pipefail
           if [ -z "${PRIVATE_KEY:-}" ] || [ "${PRIVATE_KEY}" = "" ]; then
@@ -90,13 +96,30 @@ jobs:
             echo "ERROR: secret TESTNET_RPC_URL is not set." >&2
             exit 1
           fi
+          VERIFY_FLAGS=()
+          if [ -n "${ETHERSCAN_API_KEY:-}" ]; then
+            case "${CHAIN_ID}" in
+              11155111|1)
+                VERIFY_FLAGS+=(--verify)
+                echo "Verification: Etherscan (--verify) for chain_id=${CHAIN_ID}"
+                ;;
+            esac
+          fi
+          if [ "${#VERIFY_FLAGS[@]}" -eq 0 ] && [ -n "${CONTRACTS_BLOCKSCOUT_URL:-}" ]; then
+            VERIFY_FLAGS+=(--verify --verifier blockscout --verifier-url "${CONTRACTS_BLOCKSCOUT_URL}")
+            echo "Verification: Blockscout (--verifier blockscout) url=${CONTRACTS_BLOCKSCOUT_URL}"
+          fi
+          if [ "${#VERIFY_FLAGS[@]}" -eq 0 ]; then
+            echo "WARN: No contract verification (set secret ETHERSCAN_API_KEY for Sepolia/mainnet, or var CONTRACTS_BLOCKSCOUT_URL for Blockscout)." >&2
+          fi
           forge script script/Deploy.s.sol:DeployScript \
             --rpc-url "${ETH_RPC_URL}" \
             --broadcast \
             --chain-id "${CHAIN_ID}" \
             --gas-estimate-multiplier 150 \
             --timeout 600 \
-            -vvv
+            -vvv \
+            "${VERIFY_FLAGS[@]}"
 
       - name: Verify deployment artifact exists
         working-directory: contracts

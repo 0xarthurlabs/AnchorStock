@@ -32,6 +32,8 @@ import {MockPyth} from "../src/mocks/MockPyth.sol";
  *
  * 3) 正式部署并广播交易 / Deploy and broadcast
  *    forge script script/Deploy.s.sol:DeployScript --rpc-url <RPC_URL> --broadcast --chain-id <CHAIN_ID>
+ *    Sepolia + Etherscan verify（需 contracts/.env 中 ETHERSCAN_API_KEY，PowerShell 需先注入环境变量）:
+ *    forge script script/Deploy.s.sol:DeployScript --rpc-url <RPC> --broadcast --chain-id 11155111 --verify
  *    Sei 测试网（建议加 --gas-estimate-multiplier 150 避免 RPC 估算不足）/ Sei testnet (add --gas-estimate-multiplier 150 if needed):
  *    forge script script/Deploy.s.sol:DeployScript --rpc-url https://sei-testnet.g.alchemy.com/v2/YOUR_KEY --broadcast --chain-id 1328 --gas-estimate-multiplier 150
  *
